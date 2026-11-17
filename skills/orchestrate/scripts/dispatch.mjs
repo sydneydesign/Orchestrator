@@ -4,7 +4,8 @@
  * (Placement and launch, The guard) in order:
  *
  *   1. resolve the workspace: `current` (the main checkout) or `branch:<branch>` (a writer's worktree);
- *   2. refuse a second worker with the same role and scope there (by role file: Claude renames its tab);
+ *   2. refuse a second worker with the same role and scope there (by role file: Claude renames its tab), and
+ *      refuse a writer while the stories have uncommitted changes in the main checkout or its worktree;
  *   3. open the terminal in the worker permission mode;
  *   4. write the role file `<workspace>/.orchestrator/roles/<handle>.json`, with `base` for writers;
  *   5. with --close-shells, close the plain shells of a writer's worktree you created;
@@ -76,6 +77,14 @@ export function argsProblem(a, config) {
 
 export const titleOf = (a) => `${a.role}-${a.scope}`;
 
+/** Uncommitted paths under `<storiesDir>/stories/`, from `git status --porcelain` output. Pure. */
+export function dirtyStories(porcelain, storiesDir) {
+  const prefix = `${storiesDir.replace(/\\/g, "/").replace(/\/+$/, "")}/stories/`;
+  return porcelain.split(/\r?\n/).filter(Boolean)
+    .map((l) => l.slice(3).split(" -> ").pop().replace(/^"|"$/g, ""))
+    .filter((p) => p.startsWith(prefix));
+}
+
 export function roleFile(a, readOnly, base) {
   const file = { role: a.role, scope: a.scope, readOnly };
   if (!readOnly && base) file.base = base;
@@ -136,6 +145,16 @@ function main() {
   const readOnly = roleReadOnly(a.role, config) || a.readOnly;
   const workspace = workspacePath(a.worktree, root);
   if (!existsSync(join(workspace, ".orchestrator.json"))) fail(`${workspace} has no .orchestrator.json: the guard would not hold this worker`);
+  if (!readOnly && config.storiesDir) {
+    // A writer can undo a story fix it does not see committed.
+    for (const dir of new Set([resolve(root), resolve(workspace)])) {
+      let porcelain = "";
+      try { porcelain = execFileSync("git", ["-C", dir, "-c", "core.quotepath=off", "status", "--porcelain", "--untracked-files=all"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); }
+      catch { continue; } // A folder workspace has no git status.
+      const dirty = dirtyStories(porcelain, config.storiesDir);
+      if (dirty.length) fail(`uncommitted story changes in ${dir}: ${dirty.join(", ")}. Commit them before you dispatch ${a.role}.`);
+    }
+  }
   const title = titleOf(a);
   const rolesDir = join(workspace, ".orchestrator", "roles");
   const roleOf = (handle) => {

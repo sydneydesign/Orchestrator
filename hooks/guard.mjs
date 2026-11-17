@@ -100,6 +100,12 @@ const touchesBreaker = (rel, removes) => inSubagent && (rel === BREAKER_REL || (
 const storiesRel = config.storiesDir ? key(path.join(config.storiesDir, "stories")) + "/" : null;
 const mapRel = config.storiesDir ? key(path.join(config.storiesDir, "map.md")) : null;
 
+// True only when git answers that HEAD is detached: no repository or a git error is not a detached HEAD.
+function detached(dir) {
+  try { return execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: dir, stdio: ["ignore", "pipe", "ignore"] }).toString().trim() === "HEAD"; }
+  catch { return false; }
+}
+
 function currentBranch(dir) {
   try { return execFileSync("git", ["symbolic-ref", "--short", "HEAD"], { cwd: dir, stdio: ["ignore", "pipe", "ignore"] }).toString().trim(); }
   catch { return null; }
@@ -216,6 +222,11 @@ function checkGit(args) {
     if (current && (unsets || (value !== undefined && value !== current))) block(`core.hooksPath stays at ${current}: the project's commit checks run from there.`);
   }
 
+
+  // A detached HEAD takes a role's commits off the branch the orchestrator merges: the merge comes out empty.
+  if (inSubagent && ["commit", "merge", "rebase", "cherry-pick", "pull", "am", "revert"].includes(sub) && detached(dirArg)) {
+    block(`HEAD is detached in ${dirArg}: git ${sub} would put commits on no branch. Report BLOCKED; the orchestrator puts you back on your branch.`);
+  }
   if (sub === "push") {
     if (has(/^(--force|--force-with-lease|--force-if-includes)/) || has(/^-[a-z]*f/i) || has(/^\+/)) block("force push is blocked.");
     if (has(/^--no-verify$/)) block("--no-verify is blocked. Fix the failing hook instead.");
@@ -403,6 +414,8 @@ if (input.hook_event_name === "PreToolUse" && ["Bash", "PowerShell"].includes(in
 // Orca worker finishes. In the orchestrator's own session there is no role, so Stop exits at once.
 
 if (input.hook_event_name === "SubagentStop" || input.hook_event_name === "Stop") {
+  // A detached HEAD holds commits no branch carries: the merge of the branch would bring none of them.
+  if (inSubagent && !readOnlyRole && !input.stop_hook_active && detached(root)) block("HEAD is detached: your commits are on no branch. Do not move HEAD yourself. Report BLOCKED with the output of `git log --oneline -3`.");
   if (!isRole("builder")) process.exit(0);
   // Content, not command shape: whatever tool changed a locked file, the story files or the lock
   // list, the difference from HEAD shows it. This check ignores stop_hook_active: the builder

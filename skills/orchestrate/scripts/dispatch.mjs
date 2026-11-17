@@ -77,12 +77,9 @@ export function argsProblem(a, config) {
 
 export const titleOf = (a) => `${a.role}-${a.scope}`;
 
-/** Uncommitted paths under `<storiesDir>/stories/`, from `git status --porcelain` output. Pure. */
-export function dirtyStories(porcelain, storiesDir) {
-  const prefix = `${storiesDir.replace(/\\/g, "/").replace(/\/+$/, "")}/stories/`;
-  return porcelain.split(/\r?\n/).filter(Boolean)
-    .map((l) => l.slice(3).split(" -> ").pop().replace(/^"|"$/g, ""))
-    .filter((p) => p.startsWith(prefix));
+/** The paths in `git status --porcelain` output, already limited to the stories by its pathspec. Pure. */
+export function storyPaths(porcelain) {
+  return porcelain.split(/\r?\n/).filter(Boolean).map((l) => l.slice(3).split(" -> ").pop().replace(/^"|"$/g, ""));
 }
 
 export function roleFile(a, readOnly, base) {
@@ -148,10 +145,12 @@ function main() {
   if (!readOnly && config.storiesDir) {
     // A writer can undo a story fix it does not see committed.
     for (const dir of new Set([resolve(root), resolve(workspace)])) {
+      if (headOf(dir) === null) continue; // A folder workspace has no git status.
       let porcelain = "";
-      try { porcelain = execFileSync("git", ["-C", dir, "-c", "core.quotepath=off", "status", "--porcelain", "--untracked-files=all"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); }
-      catch { continue; } // A folder workspace has no git status.
-      const dirty = dirtyStories(porcelain, config.storiesDir);
+      // Git resolves the pathspec: ./specs, a trailing slash, case on a case-blind disk.
+      try { porcelain = execFileSync("git", ["-C", dir, "-c", "core.quotepath=off", "status", "--porcelain", "--untracked-files=all", "--", join(config.storiesDir, "stories")], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
+      catch (e) { fail(`git status failed in ${dir}: ${String(e.stderr || e.message).trim()}`); }
+      const dirty = storyPaths(porcelain);
       if (dirty.length) fail(`uncommitted story changes in ${dir}: ${dirty.join(", ")}. Commit them before you dispatch ${a.role}.`);
     }
   }

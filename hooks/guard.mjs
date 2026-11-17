@@ -106,6 +106,14 @@ function detached(dir) {
   catch { return false; }
 }
 
+// A rebase or an am stopped on a conflict keeps HEAD detached until --continue or --abort.
+function midRebase(dir) {
+  try {
+    const gitDir = execFileSync("git", ["rev-parse", "--absolute-git-dir"], { cwd: dir, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    return ["rebase-merge", "rebase-apply"].some((d) => existsSync(path.join(gitDir, d)));
+  } catch { return false; }
+}
+
 function currentBranch(dir) {
   try { return execFileSync("git", ["symbolic-ref", "--short", "HEAD"], { cwd: dir, stdio: ["ignore", "pipe", "ignore"] }).toString().trim(); }
   catch { return null; }
@@ -204,7 +212,9 @@ function checkGit(args) {
   const sub = (args[i] ?? "").toLowerCase();
   const rest = args.slice(i + 1);
   const has = (re) => rest.some((a) => re.test(a));
-  const dirArg = args.indexOf("-C") >= 0 ? path.resolve(cwd, args[args.indexOf("-C") + 1] ?? ".") : cwd;
+  // Only a global -C names the folder: `git commit -C <commit>` reuses a message.
+  const globalC = args.slice(0, i).indexOf("-C");
+  const dirArg = globalC >= 0 ? path.resolve(cwd, args[globalC + 1] ?? ".") : cwd;
 
   // Once core.hooksPath is set, it stays: unsetting it or pointing it elsewhere skips the project's hooks.
   // Reading it is fine, and so is setting it the first time (installing husky, for example).
@@ -224,7 +234,7 @@ function checkGit(args) {
 
 
   // A detached HEAD takes a role's commits off the branch the orchestrator merges: the merge comes out empty.
-  if (inSubagent && ["commit", "merge", "rebase", "cherry-pick", "pull", "am", "revert"].includes(sub) && detached(dirArg)) {
+  if (inSubagent && ["commit", "merge", "rebase", "cherry-pick", "pull", "am", "revert"].includes(sub) && detached(dirArg) && !midRebase(dirArg)) {
     block(`HEAD is detached in ${dirArg}: git ${sub} would put commits on no branch. Report BLOCKED; the orchestrator puts you back on your branch.`);
   }
   if (sub === "push") {

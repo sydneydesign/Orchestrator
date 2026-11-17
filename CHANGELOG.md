@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.1 — 2026-11-17
+
+Two checks ported from Alhaitham, Easy One’s fork of this plugin.
+
+- The guard blocks a role from committing, merging, rebasing, pulling, cherry-picking, applying patches or reverting on a detached HEAD. It also refuses the stop of a writing role there. A rebase or `am` stopped on a conflict still finishes.
+- Only a global `-C` names git’s folder for the guard. Before this, `git commit -C <commit>` skipped the protected-branch check.
+- `dispatch.mjs` refuses a writer while the stories have uncommitted changes in the main checkout or the worker’s worktree. It fails on a git error instead of passing.
+
 ## 0.7.0 — 2026-11-12
 
 A leaner instruction set: each rule lives in one place, and text that code already enforces is gone. Ported from the measured trim of Alhaitham, Easy One's fork of this plugin.

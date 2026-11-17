@@ -126,14 +126,15 @@ None of these needs a rule in any text. When a lesson's failure is on this list,
   - read-only roles writing outside `.orchestrator/work/` or running git commands that write;
   - role agents loading the `orchestrate` skill, dispatching workers or merging pull requests;
   - `worker-start --agent`, a worker terminal in the wrong permission mode, and `orca worktree rm --force`;
+  - a role committing, merging, rebasing or cherry-picking on a detached HEAD (a stopped rebase may finish);
   - the same failing command after `verify.maxSameFailure` runs.
 
   It asks the human before:
   - every push and pull-request merge when `git.allowPush` is `false`;
   - an inline script (`node -e`, `python -c`, a heredoc) that mentions git and starts a program.
 
-  It runs `verify.onBuilderStop` when a builder stops, and refuses the stop while locked files differ from their commit.
-- **`dispatch.mjs`** handles the role file, the worker permission mode, the empty shells and the stop on a prompt. It refuses a second worker with the same role and scope, a writer on `current`, and a read-only role in a worktree.
+  It runs `verify.onBuilderStop` when a builder stops, and refuses the stop while locked files differ from their commit. It refuses the stop of a writing role on a detached HEAD.
+- **`dispatch.mjs`** handles the role file, the worker permission mode, the empty shells and the stop on a prompt. It refuses a second worker with the same role and scope, a writer on `current`, a read-only role in a worktree, and a writer while the stories have uncommitted changes in the main checkout or the worker’s worktree.
 - **`stories.mjs --check`** fails on a stale map and on a context document that names a missing path or script.
 
 ## Avoid

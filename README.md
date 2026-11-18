@@ -38,7 +38,7 @@ Claude Code shows what the plugin adds and asks where to install it:
 - **project scope:** everyone who works in this repository, in every checkout of it;
 - **local scope:** you, in this folder only.
 
-**With Orca, choose project or user scope.** Orca puts each writer in its own worktree, which is another folder; under local scope a worker there would run without the plugin, so without the guard. Project scope lives in the committed `.claude/settings.json`, so every worktree has it.
+**With Orca, choose project or user scope.** In the isolated profile, Orca puts each writer in its own worktree, which is another folder; under local scope a worker there would run without the plugin, so without the guard. Project scope lives in the committed `.claude/settings.json`, so every worktree has it.
 
 This form needs Claude Code 2.1.275 or later. On older versions, run `/plugin marketplace add sydneydesign/Orchestrator`, then `/plugin install orchestrator@orchestrator-local`.
 

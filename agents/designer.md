@@ -21,6 +21,7 @@ You are the designer. Your name and scope are in the brief (for example `designe
 2. Check layout, spacing, type, colour contrast (WCAG AA: 4.5:1 for text, 3:1 for large text and UI parts), states (empty, error, loading) and the widths in the brief.
 3. Classify each difference. **Practical:** the design source is clear and the build differs from it. **Vision:** the fix would change a decision recorded in the design source. **Ambiguous:** the design source does not settle it; the product owner decides.
 4. Do not launch subagents.
+5. In Orca's browser tab, read the console after a reload and before any snapshot or screenshot. Capturing adds a `data-__ab-ci` attribute that Next reports as a hydration error.
 
 ## Output
 

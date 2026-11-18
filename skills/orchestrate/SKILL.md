@@ -28,12 +28,13 @@ Two decisions, in this order: **who** does it, then **through which mechanism**.
 
 A human ruling can change the mechanism, for example "no commits", which keeps writers out of their own worktrees. When you ask for one, name what the human loses: "the builder runs as a subagent, with no terminal you can watch". Write the ruling with its scope. It expires at the end of the block of work; ask again at the next block. It never moves read-only roles: in Orca they stay visible workers.
 
-In Orca, the mechanism follows from the work:
+In Orca, pick the block's profile first, live or isolated (`references/harness.md`, **Two mechanisms**). Then the mechanism follows from the work:
 
 | The work | Mechanism | Where |
 |---|---|---|
 | Trivial or coupled: a merge, a criterion's text, locking tests, a one-file fix | You, directly | Your checkout, or a branch's worktree with `git -C <literal path>` |
-| Writes: `builder`, a writing `copywriter`, a project role with `readOnly: false` | A supervised worker | The worktree of its branch. A new worktree only for a new branch |
+| Writes, live profile: `builder`, a writing `copywriter`, a project role with `readOnly: false` | A subagent, or a supervised worker with `--live` | The main checkout, on the block's branch. One writer at a time |
+| Writes, isolated profile | A supervised worker | The worktree of its branch. A new worktree only for a new branch |
 | Judges or reads: `reviewer`, `researcher`, `designer`, a project role with `readOnly: true` | A supervised worker | `current`, no worktree |
 | A short lookup only you need | The Agent tool | Your session |
 
@@ -46,7 +47,8 @@ Who does it, first match wins:
 3. **Heavy reading** (research, a codebase audit, comparing sources): `researcher`, in parallel when the questions are independent.
 4. **Writing:** one writer at a time.
    - Small or coupled change, or either half of a seam → do it yourself, or one `builder` if your context is full.
-   - Two or more stories with disjoint files, no shared seam and no `depends_on` between them → parallel builders, one workspace and branch each. Check file overlap before launching.
+   - Two or more stories with disjoint files, no shared seam and no `depends_on` between them → parallel builders, one workspace and branch each (isolated profile). Check file overlap before launching.
+   - Several stories for one builder: the brief asks for one commit per criterion that turns green, so work survives a run that ends early.
 
 Overrides:
 - A risk tag (`.orchestrator.json` → `riskTags`) adds a `reviewer` even to small work.
@@ -78,11 +80,16 @@ Read first: <story file>, <files to follow as patterns>
 Constraints: <seams, invariants, do-not-touch>
 You may edit: <paths>   (read-only roles: "nothing")
 Done when: <the check that proves it, with the exact command>
+Budget: write your report before about <N> tool calls, even if work remains
 Write your full output to: <absolute path>/.orchestrator/work/<scope>/<role>.md
 Escalate instead of guessing when: <the open points you can foresee>
 ```
 
 Pass the story file path, never a paraphrase. A paraphrase changes the criteria the agent works from.
+
+Set the budget below the role's turn limit (builder: 150). A builder with many stories ran out of turns without a report twice (gg-ez, 2026-11-18).
+
+When the human corrects something mid-block, write the correction as a general rule in the `Constraints:` of the next brief ("padding ≥ corner radius", "an avatar next to a field takes the field's height and centre"), not as a one-off fix.
 
 ## 5. Read every report
 
@@ -93,6 +100,7 @@ Builder statuses:
 - `DONE_WITH_CONCERNS`: read the concerns first.
 - `BLOCKED`: resolve the blocker or escalate it. Never relaunch the same brief.
 - `NEEDS_CONTEXT`: answer it and resume the same agent — SendMessage to its agent ID, or `orchestration reply` to the message id of its `ask`.
+- No report (a subagent ran out of turns): resume the same agent with SendMessage and ask only "verify, commit, report". Do not relaunch the brief.
 
 In Orca the report arrives as a message: `references/harness.md` maps these statuses onto `worker_done`, `escalation` and `ask`.
 
@@ -109,13 +117,13 @@ Load the `stories` skill to write or split stories.
 
 1. **Pick.** Choose the next story from the map. Check `depends_on` and open decisions.
 2. **Ready.** Run `node <storiesDir>/stories.mjs --ready <ID>`. Fix what you can. Product questions go to the human, batched. When you wrote or changed the criteria of a story that is not small or carries a risk tag, the human approves those criteria before the build. Batch the approvals: one message for every story about to start.
-3. **Branch.** `story/<ID>-<slug>`. A writer gets its own workspace: `isolation: worktree` through the Agent tool, `dispatch.mjs --worktree branch:<branch>` in Orca, which also writes the role file the guard needs.
+3. **Branch.** Isolated profile: `story/<ID>-<slug>`, and a writer gets its own workspace, `isolation: worktree` through the Agent tool or `dispatch.mjs --worktree branch:<branch>` in Orca, which also writes the role file the guard needs. Live profile: the block's stories share one branch, `block/<slug>`; switch the main checkout to it before the first writer starts.
 4. **Build.** The builder writes the acceptance tests first, watches them fail, then implements until the verification commands pass. One run, red to green. When `.orchestrator.json` has `ui` and the harness exposes a browser (`references/harness.md`, **Browser**), the brief also asks for the UI check of builder rule 12. Only one agent drives the browser at a time.
-5. **Lock.** As soon as the builder reports DONE, add the acceptance-test files to `.orchestrator/locked-tests.txt`, with the helpers they import and the test runner's config. Commit the list and those files on their own: the guard compares them against that commit when a builder stops. From here no agent can edit them, so the fix loop cannot weaken them.
+5. **Lock.** As soon as the builder reports DONE, add the acceptance-test files to `.orchestrator/locked-tests.txt`, with the helpers they import and the test runner's config. Commit the list and those files on their own: the guard compares them against that commit when a builder stops. From here no agent can edit them, so the fix loop cannot weaken them. A test for behaviour that polish added needs its own criterion in the story before you lock it: two tests were locked under criteria they did not observe.
 6. **Review.** One fresh `reviewer` judges the diff up to one exact commit, named in its brief, against the story: tests first (do they observe each criterion?), then story compliance, then code quality. It trusts the builder's command output and the CI result, and runs a check of its own only to probe a doubt. A second reviewer joins only for a risk tag that names its concern: a security role for a security tag, `copywriter` or `designer` when the story changes user-facing text or UI and the project names them. Each extra reviewer costs a whole agent session per story.
-7. **Fix round.** Critical and Important findings go back once, to a builder on the same branch: in Orca a fresh builder in the same worktree, with a fix brief (`references/harness.md`). The re-review checks only the fix: its brief names the reviewed commit and the fix commit. Minor findings go to the ledger and never start a round. After the one round, rule on what is left, or escalate it if it is a product call. A defect that predates the story goes to the ledger as its own item, unless the story's diff touches the same lines. Never fix findings yourself while a builder owns the story. A finding against a locked test is the only reason to unlock it without the human: remove that one file from the list, commit, send the fix, and lock it again when the fix is DONE.
+7. **Fix round.** Critical and Important findings go back once, to a builder on the same branch: in Orca a fresh builder in the same worktree, with a fix brief (`references/harness.md`). The re-review checks only the fix: its brief names the reviewed commit and the fix commit. Minor findings go to the ledger and never start a round. After the one round, rule on what is left, or escalate it if it is a product call. A defect that predates the story goes to the ledger as its own item, unless the story's diff touches the same lines. Never fix findings yourself while a builder owns the story. When a builder still works in the files a finding names (live profile, often on the next story), send the finding to that builder as an extra item: SendMessage to a subagent, or an orchestration message to a worker (the guide's `messaging-and-gates`). Never open a second writer on those files. A correction from the human mid-block takes the same path. A finding against a locked test is the only reason to unlock it without the human: remove that one file from the list, commit, send the fix, and lock it again when the fix is DONE. When the human changes a decision that locked tests observe: edit the criterion, unlock those files in a commit of their own that names the reason, send the change, and lock them again when it is DONE.
 8. **Update the story.** Set each criterion's marker, using the markers in the `stories` skill. Run `stories.mjs --tests`; a criterion becomes a test marker only when its test passes there.
-9. **Commit.** Apart from the lock commits, you commit once per story on its branch, staging files by name. You merge or rebase story branches yourself, never a builder: the merge often changes `locked-tests.txt`, and the guard stops a builder there.
+9. **Commit.** Apart from the lock commits, you commit once per story on its branch, staging files by name. While a writer shares your checkout, commit only with `git commit -- <paths>` (`references/git.md`). You merge or rebase story branches yourself, never a builder: the merge often changes `locked-tests.txt`, and the guard stops a builder there.
 10. **Human.** Queue the story for acceptance (§7).
 
 **Irreversible steps inside a story** (a data migration, a deletion, a call to a live external service): the builder stops before the step and reports BLOCKED with what it will do. You take it to the human as an item of §7.1. Everything before the step continues.

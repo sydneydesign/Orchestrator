@@ -13,7 +13,16 @@ The harness decides **how** you delegate, not whether. Every judgement in the `o
 | Role rules in the guard | from the role file `dispatch.mjs` writes | from `agent_type` |
 | Cost | a whole agent session | cheap |
 
-**In Orca the worker is the default.** Use the Agent tool only for a short read-only lookup whose answer only you need. Everything that writes, runs long, or produces a verdict the human will read is a supervised worker. When the human asks to supervise or track the work, it is always a worker: a subagent leaves no trace in Orca.
+**In Orca, pick a profile for each block of work.** The work decides, not the harness. Write the profile and its reason on the ledger's second line, and keep it for the whole block.
+
+| Profile | When | Writers | Readers |
+|---|---|---|---|
+| **Live** | The human watches the result on localhost as it lands, or the block's stories share files | One at a time, in the main checkout, on the block's branch: a subagent (Agent tool), or a worker with `dispatch.mjs --worktree current --live` when the human wants to watch its terminal | In parallel: workers on `current`, or subagents |
+| **Isolated** | Long stories with disjoint files, parallel writers, or work that must outlive your context | A supervised worker each, in the worktree of its story's branch | Workers on `current` |
+
+When in doubt, choose live. Isolated has a fixed cost per writer: a new worktree starts without dependencies, ignored files (`.env`, build output) or a dev server, it asks for folder trust and MCP approval on Windows, every hand-off takes several steps, and the human cannot see the work on localhost before the merge. In gg-ez (2026-11-18) a block of coupled UI stories ran faster live than isolated.
+
+In both profiles, a short read-only lookup whose answer only you need goes to the Agent tool. When the human asks to supervise or track a role, that role is a worker: a subagent leaves no trace in Orca.
 
 **In plain Claude Code** the Agent tool is the only mechanism. Parallel writers get `isolation: worktree`. Separate sessions run only if the human starts them; coordinate through `.orchestrator/work/` and cross-session messages. A message lasts as long as its session; the branch and the files are the durable record.
 
@@ -48,7 +57,7 @@ A gate records a decision **you** own that blocks one Task while the rest of the
 
 ## Placement and launch
 
-- **Writers** (`builder`, a writing `copywriter`, a project role with `readOnly: false`) work in the worktree of their story's branch, one worktree per writer. The branch rules of `references/git.md` apply inside it.
+- **Writers** (`builder`, a writing `copywriter`, a project role with `readOnly: false`) follow the block's profile. Isolated: the worktree of their story's branch, one worktree per writer. Live: `current` with `--live`, one writer at a time, with the main checkout on the block's branch. The branch rules of `references/git.md` apply in both.
 - **Read-only roles** (`reviewer`, `researcher`, `designer`, a reviewing `copywriter`) run on `current`: they judge what is there and write only their report.
 - **A folder workspace** has no worktrees and no branches: `git.md` does not apply, and the verification commands are the only evidence. Say so in the close report.
 - Pass a model only when the human named one.
@@ -59,7 +68,7 @@ A gate records a decision **you** own that blocks one Task while the rest of the
 ```
 node <this skill's directory>/scripts/dispatch.mjs --role <role> --scope <scope> --brief <brief.md> \
   --worktree <current | branch:<branch>> --run <run id> \
-  [--mode <your mode>] [--read-only] [--close-shells] [--keep-open] [--terminal <handle>] [--dry-run]
+  [--mode <your mode>] [--read-only] [--live] [--close-shells] [--keep-open] [--terminal <handle>] [--dry-run]
 ```
 
 It opens the terminal in the worker permission mode, writes the role file, closes the empty shells of a new worktree (`--close-shells`), stops on any prompt, and dispatches the brief from its file. It prints `{ title, handle, dispatchId, workspace, roleFile }`; write the dispatch id in the ledger.
@@ -96,6 +105,7 @@ What real runs taught:
 - The snapshot can lag behind the page. Screenshots are the evidence.
 - Pick elements by the snapshot's ref, scoped to the content region. A text match picked the wrong combobox and hit the sidebar's user menu.
 - After a code change, run `orca reload` before checking. Hot reload missed a new component.
+- Read the console after the reload and before any `snapshot` or `screenshot`. Both add a `data-__ab-ci` attribute to the DOM, and Next reports it as a hydration error (gg-ez, 2026-11-18). Builder rule 12 carries this to the builder.
 - There is one tab: never give the UI check to two agents at once.
 
 ## The guard
@@ -127,21 +137,22 @@ None of these needs a rule in any text. When a lesson's failure is on this list,
   - role agents loading the `orchestrate` skill, dispatching workers or merging pull requests;
   - `worker-start --agent`, a worker terminal in the wrong permission mode, and `orca worktree rm --force`;
   - a role committing, merging, rebasing or cherry-picking on a detached HEAD (a stopped rebase may finish);
-  - the same failing command after `verify.maxSameFailure` runs.
+  - the same failing command after `verify.maxSameFailure` runs;
+  - in the PowerShell tool, an inline script (`node -e`, `python -c`) and `Set-Content`, `Add-Content` or `Out-File` with `-Encoding utf8`.
 
   It asks the human before:
   - every push and pull-request merge when `git.allowPush` is `false`;
   - an inline script (`node -e`, `python -c`, a heredoc) that mentions git and starts a program.
 
   It runs `verify.onBuilderStop` when a builder stops, and refuses the stop while locked files differ from their commit. It refuses the stop of a writing role on a detached HEAD.
-- **`dispatch.mjs`** handles the role file, the worker permission mode, the empty shells and the stop on a prompt. It refuses a second worker with the same role and scope, a writer on `current`, a read-only role in a worktree, and a writer while the stories have uncommitted changes in the main checkout or the worker’s worktree.
+- **`dispatch.mjs`** handles the role file, the worker permission mode, the empty shells and the stop on a prompt. It refuses a second worker with the same role and scope, a writer on `current` without `--live`, a live writer while another writer is open on `current` or while the main checkout is on a protected branch or a detached HEAD, a read-only role in a worktree, and a writer while the stories have uncommitted changes in the main checkout or the worker’s worktree.
 - **`stories.mjs --check`** fails on a stale map and on a context document that names a missing path or script.
 
 ## Avoid
 
 - Experimental agent teams as the backbone: their plan approvals bypass the human, and teammates do not survive a resume.
-- Two writers on the same files, in any harness.
+- Two writers on the same files, in any harness. A finding or a correction on files a writer still holds goes to that writer as an extra item (skill §6.7).
 - `dispatch --inject` (it leaves the process unsupervised), `terminal close` in place of `worker-release`, and `orchestration reset` during active coordination.
 - Starting services (Docker, a database, a dev server) inside a worker's terminal: releasing the worker closes them. One release closed Docker Desktop and took the database down. Start shared services yourself.
-- Editing files inside a builder's worktree while it works: its `Stop` check restores them. Edit stories in your own checkout, after the release.
+- Editing files inside a builder's worktree while it works: its `Stop` check restores them. Edit stories in your own checkout, after the release. In the live profile the builder shares your checkout: leave its files alone and commit only with `git commit -- <paths>` (`references/git.md`).
 - Opening a browser, Orca's included, unless the brief or the human allows it. The `ui` key in `.orchestrator.json` is the human's permission for the UI check, and only for it.

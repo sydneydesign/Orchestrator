@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.0 — 2026-11-18
+
+Lessons from the gg-ez reference redesign block, sent by its orchestrator session.
+
+- **Profiles.** The orchestrator picks a profile for each block of work and writes it in the ledger. Live: writers run one at a time in the main checkout, on the block's branch `block/<slug>`, as subagents or as workers. Isolated: each writer gets its own worktree, as before. When in doubt, choose live. A live block of coupled UI stories ran faster than workers in worktrees.
+- `dispatch.mjs --live` puts a writer on `current`. It refuses the launch when another writer is open on `current`, or when the main checkout is on a protected branch or a detached HEAD.
+- The guard blocks two commands in the PowerShell tool. The first is an inline script (`node -e`, `python -c`): PowerShell rewrites `$1` and quotes inside it, and one script deleted a story's criteria. The second is `Set-Content`, `Add-Content` or `Out-File` with `-Encoding utf8`: it writes a BOM, which broke lint.
+- Briefs carry a call budget. A builder with several stories commits after each criterion turns green. A subagent that runs out of turns without a report is resumed with "verify, commit, report".
+- A finding or a human correction on files a builder still holds goes to that builder as an extra item, never to a second writer. A correction also becomes a general rule in the next brief.
+- While a writer shares the checkout, the orchestrator commits with `git commit -- <paths>`.
+- A polish test gets its own criterion before it is locked. A human change to a decision that locked tests observe unlocks those files in their own commit, with the reason.
+- Builder and designer read the console before they capture in Orca's browser tab: the capture adds `data-__ab-ci`, which Next reports as a hydration error.
+- A test over a set reads the set from the code, never from an example.
+- PR titles are plain words without story IDs. The body leads with what matters. A visible change adds before and after screenshots.
+
 ## 0.7.1 — 2026-11-17
 
 Two checks ported from Alhaitham, Easy One’s fork of this plugin.

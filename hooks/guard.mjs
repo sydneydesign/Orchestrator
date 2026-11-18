@@ -374,6 +374,14 @@ if (input.hook_event_name === "PreToolUse" && ["Bash", "PowerShell"].includes(in
       const script = tokens.some((t) => t.includes("<<")) ? interpreterHeredocs(String(input.tool_input?.command ?? "")) : tokens.slice(1).join(" ");
       if (MENTIONS_GIT.test(script) && SPAWNS.test(script)) confirm(`this ${tokens[0]} script mentions git, and git calls inside a script are not checked. Confirm it does not commit, push or rewrite history.`);
     }
+    // Windows PowerShell 5 expands $1 and eats quotes inside an inline script (it deleted a story's
+    // criteria), and its -Encoding utf8 writes a BOM (it broke lint and can break a story's frontmatter).
+    if (input.tool_name === "PowerShell") {
+      if (INTERPRETERS.test(tokens[0]) && /^(-e|--eval|-p|--print|-c)$/i.test(tokens[1] ?? "")) block(`PowerShell rewrites $ and quotes inside an inline ${tokens[0]} script. Write the script to a file in your scratchpad and run that file, or edit with Edit/Write.`);
+      const enc = tokens.findIndex((t) => /^-encoding(:|$)/i.test(t));
+      const encValue = enc < 0 ? "" : tokens[enc].includes(":") ? tokens[enc].split(":")[1] : tokens[enc + 1] ?? "";
+      if (/^(set-content|add-content|out-file|sc|ac)$/i.test(tokens[0]) && /^utf-?8(bom)?$/i.test(encValue)) block(`${tokens[0]} -Encoding utf8 writes a byte-order mark in Windows PowerShell. Write the file with Edit/Write instead.`);
+    }
     if (isGit(tokens[0])) {
       if (readOnlyRole && !/^(status|diff|log|show|blame|grep|ls-files|rev-parse|branch|remote)$/i.test(gitSubcommand(tokens))) block(`${agentType} is read-only. It may only run git commands that read.`);
       checkGit(tokens.slice(1));

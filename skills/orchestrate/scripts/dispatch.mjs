@@ -4,8 +4,9 @@
  * (Placement and launch, The guard) in order:
  *
  *   1. resolve the workspace: `current` (the main checkout) or `branch:<branch>` (a writer's worktree);
- *   2. refuse a second worker with the same role and scope there (by role file: Claude renames its tab), and
- *      refuse a writer while the stories have uncommitted changes in the main checkout or its worktree;
+ *   2. refuse a second worker with the same role and scope there (by role file: Claude renames its tab),
+ *      refuse a writer while the stories have uncommitted changes in the main checkout or its worktree, and
+ *      for a live writer on `current`, refuse a protected or detached branch and a second open writer;
  *   3. open the terminal in the worker permission mode;
  *   4. write the role file `<workspace>/.orchestrator/roles/<handle>.json`, with `base` for writers;
  *   5. with --close-shells, close the plain shells of a writer's worktree you created;
@@ -15,10 +16,11 @@
  * Usage, from the project root:
  *   node <skill dir>/scripts/dispatch.mjs --role <role> --scope <scope> --brief <brief.md>
  *     --worktree <current | branch:<branch>> --run <run id>
- *     [--mode <permission mode>] [--read-only] [--close-shells] [--keep-open] [--terminal <handle>] [--dry-run]
+ *     [--mode <permission mode>] [--read-only] [--live] [--close-shells] [--keep-open] [--terminal <handle>] [--dry-run]
  *
  * --mode is required when .orchestrator.json has no orca.workerPermissionMode: pass your own session's mode.
  * --read-only tightens a writing role for this dispatch (a reviewing copywriter); it never loosens one.
+ * --live puts a writer on `current`, for a block in the live profile (references/harness.md, Profiles).
  * --terminal resumes a launch that stopped at a prompt, after the human answered it.
  * Prints one JSON line: { title, handle, dispatchId, workspace, roleFile }.
  */
@@ -35,8 +37,8 @@ const SHELL_TITLE = /^(Terminal \d+|.*\b(powershell|pwsh|cmd)(\.exe)?|bash|zsh|s
 const stripBom = (s) => s.replace(/^﻿/, "");
 
 export function parseArgs(argv) {
-  const args = { keepOpen: false, dryRun: false, readOnly: false, closeShells: false };
-  const flags = { "--keep-open": "keepOpen", "--dry-run": "dryRun", "--read-only": "readOnly", "--close-shells": "closeShells" };
+  const args = { keepOpen: false, dryRun: false, readOnly: false, closeShells: false, live: false };
+  const flags = { "--keep-open": "keepOpen", "--dry-run": "dryRun", "--read-only": "readOnly", "--close-shells": "closeShells", "--live": "live" };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (flags[a]) args[flags[a]] = true;
@@ -68,7 +70,8 @@ export function argsProblem(a, config) {
   if (declared === undefined) return `unknown role "${a.role}": declare it in .orchestrator.json → roles.${a.role}.readOnly`;
   const readOnly = declared || a.readOnly;
   if (a.worktree !== "current" && !a.worktree.startsWith("branch:")) return "--worktree is current or branch:<branch>";
-  if (!readOnly && a.worktree === "current") return `${a.role} writes: give it its own worktree with --worktree branch:<branch>, never current`;
+  if (!readOnly && a.worktree === "current" && !a.live) return `${a.role} writes: give it its own worktree with --worktree branch:<branch>, or pass --live for a block in the live profile`;
+  if (a.live && (readOnly || a.worktree !== "current")) return "--live is only for a writer on --worktree current";
   if (readOnly && a.worktree !== "current") return `${a.role} is read-only here: use --worktree current`;
   if (!/^[\w.-]+$/.test(a.scope)) return `scope "${a.scope}" must be a story ID or a short topic (letters, digits, . _ -)`;
   if (a.closeShells && a.worktree === "current") return "--close-shells only in a writer's worktree: the shells on current are yours and the human's";
@@ -123,6 +126,14 @@ function workspacePath(selector, root) {
   return found.path.replace(/\\/g, "/");
 }
 
+/** Why a live writer cannot work on this branch of the main checkout, or null. Pure. */
+export function liveBranchProblem(branch, config) {
+  const protectedBranches = config?.git?.protectedBranches ?? ["main", "master"];
+  if (!branch || branch === "HEAD") return "the main checkout has a detached HEAD: switch it to the block's branch first";
+  if (protectedBranches.includes(branch)) return `the main checkout is on ${branch}, where the guard blocks commits: switch it to the block's branch first`;
+  return null;
+}
+
 function headOf(dir) {
   try { return execFileSync("git", ["-C", dir, "rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); }
   catch { return null; } // A folder workspace has no commit to start from.
@@ -162,6 +173,16 @@ function main() {
   const open = orca(["terminal", "list", "--worktree", a.worktree]).terminals ?? [];
   const twin = open.find((t) => t.handle !== a.terminal && roleOf(t.handle)?.role === a.role && roleOf(t.handle)?.scope === a.scope);
   if (twin) fail(`${title} is already open in ${a.worktree} (${twin.handle}): send it a message instead`);
+  if (a.live) {
+    // One writer at a time in the main checkout. A subagent writer leaves no role file: the skill rules it.
+    const writer = open.map((t) => ({ t, r: t.handle === a.terminal ? null : roleOf(t.handle) })).find(({ r }) => r?.readOnly === false);
+    if (writer) fail(`${writer.r.role}-${writer.r.scope} already writes in current (${writer.t.handle}): send it the work as an extra item, or wait for it`);
+    let branch;
+    try { branch = execFileSync("git", ["-C", root, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); }
+    catch { branch = undefined; } // A folder workspace has no branch to protect.
+    const branchProblem = branch === undefined ? null : liveBranchProblem(branch, config);
+    if (branchProblem) fail(branchProblem);
+  }
 
   const file = roleFile(a, readOnly, readOnly ? null : headOf(workspace));
   if (a.dryRun) {

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.1 — 2026-11-18
+
+The second batch of lessons from the gg-ez reference redesign block.
+
+- The builder knows from the start that the orchestrator unlocks and relocks tests, and that it never edits a story by any means. It drafts criterion text in its report.
+- A new criterion joins a story only when it serves that story's benefit. Otherwise it starts a new story.
+- Before the orchestrator calls a UI story done, it looks at the builder's screenshots itself.
+- A UI brief names the project's primitives to use.
+- A human's local-only change is marked in the ledger. Every brief says never to stage it, and a writer that must change it hands over a diff.
+- The orchestrator checks an agent's factual claims before it passes them on.
+- Before proposing repository settings, check the human's permissions with `gh api`.
+
 ## 0.8.0 — 2026-11-18
 
 Lessons from the gg-ez reference redesign block, sent by its orchestrator session.

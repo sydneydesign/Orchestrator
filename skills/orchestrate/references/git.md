@@ -32,6 +32,8 @@
 
 Use these only when several people work in the repository. The human applies them, because they change a shared repository.
 
+Before you propose any change to the repository's settings (these, the description, the topics), run `gh api repos/<owner>/<repo> -q .permissions`. Most settings need `admin`. A human with only `push` cannot apply them, so ask the owner instead.
+
 - Branch protection on the default branch: PR required, status checks required.
 - Required checks: the project's verification commands plus `node <storiesDir>/stories.mjs --tests --check`.
 - `CODEOWNERS`: the acceptance-test paths and the stories folder go to the product owner or the named code owner.

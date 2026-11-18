@@ -51,6 +51,7 @@ Each criterion is a **rule**, optionally followed by **key examples**.
 - Write examples declaratively ("the user saves"), not as clicks, selectors or URLs.
 - Include the unhappy paths: error, empty, permission, limit. Agents skip them unless told.
 - More than 6 criteria: split the story.
+- A new criterion goes into a story only when it serves that story's benefit (the "so that"). Otherwise write a new story. Decisions added to the nearest story grew two stories to 12 criteria each (gg-ez, 2026-11-18).
 
 ### Verification markers
 

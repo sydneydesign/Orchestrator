@@ -73,14 +73,6 @@ Open the project and run `/orchestrator:install`. It measures the project, asks 
 
 The install ends by proving each piece works on this machine: the verification commands, the validator, the guard, and one real delegation through the harness.
 
-### Projects installed as orquestador
-
-Before 0.3.0 the plugin was called orquestador. The guard still reads `.orquestador.json` and `.orquestador/`. To migrate a project:
-
-1. Rename `.orquestador.json` to `.orchestrator.json` and `.orquestador/` to `.orchestrator/` with `git mv`.
-2. Replace `.orquestador` with `.orchestrator` in `.gitignore` and in the `CLAUDE.md` block.
-3. Run `claude plugin uninstall orquestador@orquestador-local`, install `orchestrator@orchestrator-local` as above, and restart the CLI.
-
 ## Design principles
 
 - **Code over prose.** A rule the guard or a script enforces is not repeated in the instructions; the instructions keep only what a model cannot infer.

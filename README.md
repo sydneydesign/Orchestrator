@@ -1,48 +1,75 @@
 # Orchestrator
 
-A Claude Code plugin for orchestrated product work: one main session plans and decides, role agents build and review, user stories with verifiable acceptance criteria define "done", and a guard hook holds every agent to its contract.
+A Claude Code plugin for structured product work. One main session plans and decides. Role agents build and review. User stories with verifiable acceptance criteria define "done". A guard hook holds every agent to its contract.
+
+![license](https://img.shields.io/badge/license-MIT-green) ![claude code](https://img.shields.io/badge/Claude%20Code-plugin-orange)
+
+- [Why](#why)
+- [How it works](#how-it-works)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Set up a project](#set-up-a-project)
+- [Day-to-day use](#day-to-day-use)
+- [Stories](#stories)
+- [Configuration](#configuration)
+- [The guard](#the-guard)
+- [Roles](#roles)
+- [Design principles](#design-principles)
+- [Upgrading](#upgrading)
+- [License](#license)
+
+## Why
+
+An agent that writes code, judges its own work and reports its own progress tends to report success. Orchestrator separates those jobs:
+
+- **The author is never the judge.** A builder writes the code. A fresh reviewer, which never sees the builder's reasoning, judges the diff against the story.
+- **"Done" is evidence.** Every acceptance criterion carries a marker: a passing test, a dated manual check, or an honest "unverified". A validator computes each story's status from the markers. Nobody writes a status by hand.
+- **Tests cannot be weakened to get green.** Acceptance tests are written first and locked once they pass. The guard stops any agent from changing them.
+- **The human is asked only what a human must decide.** Product calls, irreversible actions and final acceptance reach the human. Everything else proceeds and is logged.
 
 ## How it works
 
-- **The main session is the orchestrator.** It owns the plan, the decisions and the merge, and it delegates by its own judgement. It contacts the human only for irreversible or outward-facing actions, product calls, what machines cannot verify, and final acceptance.
-- **Role agents do the work.** The plugin ships `builder` (the only role that writes code), `reviewer`, `researcher`, `copywriter` and `designer`. They are a starting set: each project adds the roles its work needs, from a template, in its own `.claude/agents/`. Every role is a contract: inputs, tools, output file and when to stop.
-- **User stories drive the work.** Each acceptance criterion carries a verification marker: a passing test, a dated manual check, or an honest "unverified". A validator computes each story's status from them and generates the product map.
-- **Every story follows one flow.** Ready check, a branch and its own workspace, acceptance tests written first and locked once green, one independent review, at most one fix round, then acceptance by the human.
-- **A guard hook enforces the rules that matter most.** It blocks commits on protected branches, force pushes, skipped hooks, destructive git commands, broad `git add`, and edits to locked acceptance tests. It also holds each role to its contract: read-only roles cannot write, builders cannot edit stories, role agents cannot push or merge. The full list is in `skills/orchestrate/references/harness.md`, **Enforced by code**.
-- **The harness decides how work is delegated.** Under [Orca](https://orca.dev), roles run as supervised workers under one orchestration Run, each in its own named terminal and workspace, launched with one command (`scripts/dispatch.mjs`). In plain Claude Code they run as Agent-tool subagents.
-
-The plugin is inert in projects without `.orchestrator.json`. In a project that has one, a session-start hook tells the main session to load the `orchestrate` skill.
-
-## Contents
-
-| Path | What it is |
-|---|---|
-| `skills/orchestrate/` | The orchestrator's operating procedure; references for the harness, git and roles; `scripts/dispatch.mjs` |
-| `skills/stories/` | How to write, split and maintain stories; templates |
-| `skills/install/` | Adapts the plugin to one project, and the assets it copies there |
-| `agents/` | The shipped role contracts |
-| `hooks/` | The guard |
-| `CHANGELOG.md` | What changed in each version |
-
-## Install the plugin
-
-Open Claude Code in the project and run:
-
 ```
-/plugin install orchestrator --marketplace sydneydesign/Orchestrator
+ human ──► orchestrator (main session) ──► builder ──► reviewer ──► orchestrator ──► human
+              │  plans, briefs, decides       │ tests first   │ judges the       │ accepts
+              │  merges, keeps the ledger     │ then code     │ diff vs story    │
+              ▼                               ▼               ▼
+        .orchestrator/state.md         locked tests     review report
 ```
 
-Claude Code shows what the plugin adds and asks where to install it:
+1. **The main session is the orchestrator.** It owns the plan, the decisions and the merge. It decides by itself when to delegate, and it is the only voice the human hears.
+2. **Role agents do the work.** They run as Claude Code subagents. Each one gets a written brief and returns a report file.
+3. **Every story follows one flow.** Ready check, then a branch. The builder writes the acceptance tests first, watches them fail, and makes them pass. The orchestrator locks the tests. One independent review follows, then at most one fix round, then the human's acceptance.
+4. **The guard enforces the rules that matter most.** It is a hook, so it applies whatever an agent's prompt says.
 
-- **user scope:** you, in every project on this machine;
-- **project scope:** everyone who works in this repository, in every checkout of it;
-- **local scope:** you, in this folder only.
+The plugin does nothing in a project without `.orchestrator.json`. In a project that has one, a session-start hook tells the main session to load the `orchestrate` skill.
 
-**With Orca, choose project or user scope.** In the isolated profile, Orca puts each writer in its own worktree, which is another folder; under local scope a worker there would run without the plugin, so without the guard. Project scope lives in the committed `.claude/settings.json`, so every worktree has it.
+## Requirements
 
-This form needs Claude Code 2.1.275 or later. On older versions, run `/plugin marketplace add sydneydesign/Orchestrator`, then `/plugin install orchestrator@orchestrator-local`.
+- Claude Code with plugin support.
+- Node.js 20 or later on `PATH`. The guard and the story validator use it.
+- Git. The GitHub steps use the `gh` CLI.
 
-From a shell, name the scope; without `--scope` the plugin installs at user scope. Run these from the project's folder:
+## Installation
+
+In Claude Code, from the project's folder:
+
+```
+/plugin marketplace add sydneydesign/Orchestrator
+/plugin install orchestrator@orchestrator-local
+```
+
+Claude Code asks for a scope:
+
+| Scope | Who gets the plugin | Where it is recorded |
+|---|---|---|
+| user | you, in every project on this machine | your user settings |
+| project | everyone who works in the repository, in every checkout and worktree | `.claude/settings.json`, committed |
+| local | you, in this folder only | `.claude/settings.local.json`, not committed |
+
+Choose **project** or **user** scope when stories run in parallel. A parallel writer works in its own worktree, which is another folder, and local scope does not reach it.
+
+From a shell, name the scope. Without `--scope` the plugin installs at user scope:
 
 ```
 claude plugin marketplace add sydneydesign/Orchestrator
@@ -57,40 +84,148 @@ claude plugin marketplace add ./
 claude plugin install orchestrator@orchestrator-local --scope project
 ```
 
-To try it without installing: `claude --plugin-dir <path to this folder>`.
+To try the plugin without installing it, run `claude --plugin-dir <path to this folder>`.
 
-Claude Code loads plugins when the process starts. After installing, restart the CLI (not just `/clear`), or the skills, the role agents and the guard will not be there.
+Claude Code loads plugins when the process starts. Restart the CLI after you install. `/clear` is not enough.
 
 ## Set up a project
 
-Open the project and run `/orchestrator:install`. It measures the project, asks only what it cannot measure, and writes:
+Run `/orchestrator:install` in the project. The install measures the project instead of asking about it. It runs the verification commands, times them, and checks which tests can and cannot prove. It asks the human only what it cannot measure: personas, releases, risk tags, and whether agents may check the UI in a browser.
 
-- `.orchestrator.json`: the project's plugs: verification commands, what tests cannot prove, seams, language, git rules;
-- project roles in `.claude/agents/`, when the project needs them;
-- the story folder in the project's language, with the `stories.mjs` validator;
-- a block in `CLAUDE.md`;
-- `.orchestrator/`: the ledger and the locked-tests list.
+It writes:
 
-The install ends by proving each piece works on this machine: the verification commands, the validator, the guard, and one real delegation through the harness.
+| File | Contents |
+|---|---|
+| `.orchestrator.json` | The project's settings: verification commands, what tests cannot prove, seams, language, git rules |
+| `<storiesDir>/` | The story folder in the project's language, the `stories.mjs` validator, templates and the generated map |
+| `.claude/agents/` | Project roles, when the project needs them |
+| `CLAUDE.md` | A short orchestrator block, and an empty **Lessons** section |
+| `.orchestrator/` | The ledger (`state.md`) and the list of locked tests |
+
+The install ends by proving each piece on this machine: every command runs, the validator passes, the guard blocks a force push, and a real subagent is held to its read-only role. Each check is reported as ✅ working, ⚠️ not verified (with the manual step), or ❌ failed.
+
+To bring an existing story folder under the plugin, run the install in that project. It maps the old fields and markers, converts the files with a script, and checks that the number of stories and criteria does not change.
+
+## Day-to-day use
+
+Talk to the main session in plain language: "build the password reset story", "review what's left for the first release", "explore a denser table layout". The orchestrator:
+
+- picks the next story from the map, checks it is ready, and asks you to approve criteria it wrote;
+- briefs a builder, then a reviewer, and reads both reports;
+- comes back to you only for a product call, an irreversible action (push, merge, deploy, delete), what the tests cannot prove, and acceptance;
+- writes to you in product terms: the story's title first, its ID in parentheses, and code tokens kept out of the way.
+
+For visual work you want to iterate on quickly, ask for **exploration**. The orchestrator edits directly on an `explore/<topic>` branch while you watch. When you keep the result, it turns it into stories, tests and one review in a single pass.
+
+At the end of a block of work the orchestrator runs the full verification, writes lessons from real failures into `CLAUDE.md`, and gives you one batched list: bad news first, decisions it made, and branches waiting to be pushed or merged.
+
+## Stories
+
+A story records one capability a person notices. Its criteria record exactly what is true.
+
+```markdown
+- **ACC-004.1** When the user saves a text, the system shows the new text in the preview. [test: preview.test.ts › "shows the saved text"]
+  - Given the user clears the text, when they save, then the system keeps the previous text and shows an error.
+```
+
+| Marker | Meaning |
+|---|---|
+| `[test: <file> › "<title>"]` | An automated test covers it. Counts only while the test passes. |
+| `[manual YYYY-MM-DD, who]` | A person checked it by hand on that date. |
+| `[unverified]` | The behaviour exists. Nobody has checked it. |
+| `[unbuilt]` | The behaviour does not exist yet. |
+| `[failing: reason]` | The behaviour exists and does not hold. |
+
+The validator computes each story's status from its markers and its decisions (✅ works, ⚠️ unverified, 🟡 partial, ⬜ pending, ❌ failing, 🔒 blocked, ⛔ discarded) and generates `map.md`:
+
+```
+node <storiesDir>/stories.mjs              generate the map from the last test results
+node <storiesDir>/stories.mjs --tests      run the tests, then generate the map
+node <storiesDir>/stories.mjs --check      fail on errors or a stale map (use in CI)
+node <storiesDir>/stories.mjs --ready ID   check that a story is ready to build
+node <storiesDir>/stories.mjs --pr ID      print the pull-request checklist for a story
+```
+
+A bug is never a new story: it is a failing marker on the criterion it breaks. A decision that blocks stories (a provider, pricing, hosting) lives in `decisions/` and is closed only by the human.
+
+## Configuration
+
+`.orchestrator.json`, written by the install:
+
+| Key | Purpose |
+|---|---|
+| `language` | The language of the project's stories and documents |
+| `storiesDir` | The story folder |
+| `verify.all` | The full verification commands, run once per block of work |
+| `verify.onBuilderStop` | The fast commands the guard runs when a builder stops |
+| `verify.maxSameFailure` | How many times a builder may run the same failing command (default 3) |
+| `verify.mutation` | Optional mutation-testing command for the changed files |
+| `runnerLimit` | One sentence on what the tests cannot prove. The human reviews it. |
+| `ui` | Permission for browser checks: the dev URL and the test data agents may touch. Remove it to forbid them. |
+| `seams` | Pairs of places that must change together, each with its watcher |
+| `riskTags` | Areas that add a reviewer even to small changes (for example security, legal, costs) |
+| `copy` | The copy master document and voice rules. Enables the `copywriter` role. |
+| `design` | The design source. Enables the `designer` role. |
+| `roles` | Project roles and whether each one may write |
+| `git` | Protected branches, whether pushes need confirmation, broad `git add`, the code owner |
+
+A project's `CLAUDE.md` can adjust the process. For example, a prototype with demo data can ask for one review per story and tests only for criteria with logic.
+
+## The guard
+
+`hooks/guard.mjs` runs on session start, before shell commands and file edits, and when an agent stops. It blocks:
+
+- commits, merges, rebases and pulls on protected branches;
+- force pushes, `--no-verify`, `HUSKY=0`, and changes to `core.hooksPath`;
+- broad `git add` and `commit -a`, and a branch switch and a commit in one command;
+- `reset --hard`, `clean -f`, and `checkout .` / `restore .`;
+- any write, move or delete on locked tests, the locked-tests list or the generated map;
+- pushes, merges and the orchestrator's procedure from role agents;
+- writes outside `.orchestrator/work/` from read-only roles, and story edits from builders;
+- a commit on a detached HEAD from a role agent;
+- a command that has already failed the same way `verify.maxSameFailure` times.
+
+It asks the human before each push and merge when `git.allowPush` is `false`, and before an inline script that both mentions git and starts a program. When a builder stops, the guard runs `verify.onBuilderStop` and refuses the stop while locked files differ from their commit.
+
+The full list lives in `skills/orchestrate/references/harness.md` under **Enforced by code**. A rule on that list is never repeated in the instructions.
+
+## Roles
+
+| Role | Writes | Job |
+|---|---|---|
+| `builder` | code and tests | Implements one story, test-first, until the verification commands pass |
+| `reviewer` | its report | Judges the tests, the story compliance and the code quality of one diff |
+| `researcher` | its report | Answers one question with sources and ends with one recommendation |
+| `copywriter` | the copy master | Writes and reviews user-facing text. Only when `copy` is set. |
+| `designer` | its report | Compares the built UI against the design source. Only when `design` is set. |
+
+These are a starting set. The orchestrator creates a project role when a job needs independent judgement, different permissions, or a deliverable with its own quality bar, for example a security reviewer or a translator. Project roles live in the project's `.claude/agents/` and follow `skills/orchestrate/references/role-template.md`.
 
 ## Design principles
 
-- **Code over prose.** A rule the guard or a script enforces is not repeated in the instructions; the instructions keep only what a model cannot infer.
-- **One rule, one home.** Each rule lives in the file of whoever acts on it. Lessons enter only from real failures in the project, and leave once code prevents them.
-- **Evidence, not claims.** "Done" means command output or a passing test. A review verdict without evidence is rejected.
-- **The human decides what only a human can.** Product calls, irreversible actions and acceptance always reach the human; everything else proceeds and is logged.
+- **Code over prose.** A rule that the guard or a script enforces is not repeated in the instructions. The instructions keep only what a model would not do by default.
+- **One rule, one home.** Each rule lives in the file of whoever acts on it. Lessons enter only from real failures, and leave once code prevents them.
+- **Evidence over claims.** "Done" means command output or a passing test. A review without evidence is rejected.
+- **The human decides what only a human can.** Everything else proceeds and is logged.
+- **Neutral by default.** The plugin assumes no stack, language or domain. Each project's measured settings and lessons live in that project.
 
-## Languages
+## Repository layout
 
-The plugin is written in English. Each project's files are written in that project's language: the install translates the story headings, markers and templates into `stories.config.json` → `labels` and `<storiesDir>/templates/`.
+| Path | Contents |
+|---|---|
+| `skills/orchestrate/` | The orchestrator's operating procedure, with references for the harness, git and roles |
+| `skills/stories/` | How to write, split and maintain stories, with templates |
+| `skills/install/` | The project setup, and the assets it copies |
+| `agents/` | The shipped role contracts |
+| `hooks/` | The guard |
+| `CHANGELOG.md` | Changes in each version |
 
-## Requirements
+## Upgrading
 
-- Claude Code with plugin support.
-- Node.js 20 or later on `PATH`. The guard and the validator use it.
-- Git. The GitHub steps use the `gh` CLI.
-- Optional: [Orca](https://orca.dev). Without it, roles run as Claude Code subagents.
+See [`CHANGELOG.md`](CHANGELOG.md) for the changes in each version. After an update, restart the CLI.
+
+**From 0.8.x to 0.9.0.** Orca support is removed: roles run only as Claude Code subagents. Delete the `orca` key from `.orchestrator.json`, and `.orchestrator/roles/` if it exists.
 
 ## License
 
-MIT; see `LICENSE`. Written by Sydney and Claude (Claude Code).
+MIT. See [`LICENSE`](LICENSE). Written by Sydney and Claude (Claude Code).

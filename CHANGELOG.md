@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.9.0 — 2026-11-23
+
+Orca is retired. Orca's own orchestration guide (CLI 1.4.271) conflicted with the plugin: it launches workers with `worker-start --agent`, which the guard blocked; it can open a worker as a chat with no terminal, so the guard could not find the worker's role; and it creates worker worktrees itself.
+
+- Roles run only as Claude Code subagents. Parallel writers get `isolation: worktree`.
+- The live and isolated profiles stay, without workers.
+- `scripts/dispatch.mjs` is gone, and so are the role files, `orca.workerPermissionMode`, and every "If Orca dispatched you" section.
+- The guard no longer detects a harness, reads role files or checks `orca` commands. It reads the role only from `agent_type`.
+- The UI check needs a browser tool. A builder runs it only through a command-line browser such as Playwright; otherwise the orchestrator runs it after the builder reports DONE.
+- The install proves delegation with one subagent probe.
+Pruned what Claude already knows. A line stays only when it is specific to this plugin, goes against Claude's default, or records a real failure:
+
+- Gone: "do not launch subagents" in every role (subagents cannot launch subagents); git rules the guard already enforces; generic git and `gh` advice; the role examples table; INVEST and the usual split patterns; the story anti-patterns Claude checks anyway; generic browser tips; generic research and copy rules; WCAG ratios; the Orca role-file lines in `.gitignore`.
+
+Lessons from Alhaitham, the orchestrator of Easy One, written for any project:
+
+- How to write to the human so code reads as code. A story goes by its title with the ID in parentheses, and markers become plain words. Commands go in their own blocks, and commit hashes and paths stay in the ledger. A project's `CLAUDE.md` can loosen this for a technical human.
+- The human talks only to the orchestrator, which routes each message.
+- Exploration: for fast iteration the human watches, the orchestrator edits directly on `explore/<topic>` and formalizes only when the human keeps the result.
+- One story at a time when the human refines work.
+- Scale the process to the project: a prototype gets one review per story and tests only for criteria with logic.
+- Product documentation states what is. Decisions, dates and open points stay out of it.
+- Stories cite a source, or are marked as proposals.
+- A UI state gets its own criterion only when a person cannot reach it by using the screen.
+
 ## 0.8.1 — 2026-11-18
 
 The second batch of lessons from the gg-ez reference redesign block.

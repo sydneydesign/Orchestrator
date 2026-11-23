@@ -51,6 +51,7 @@ Each criterion is a **rule**, optionally followed by **key examples**.
 - Write examples declaratively ("the user saves"), not as clicks, selectors or URLs.
 - Include the unhappy paths: error, empty, permission, limit. Agents skip them unless told.
 - More than 6 criteria: split the story.
+- In a UI, a state needs its own criterion only when a person cannot reach it by using the screen: loading, a server error, empty, a limit reached. A state a person reaches by clicking or typing (a selection, an open menu, a filter applied) belongs to the criterion of that interaction. One screen gathered 19 listed states, 15 of them interaction states (Easy One, 2026-11-17).
 - A new criterion goes into a story only when it serves that story's benefit (the "so that"). Otherwise write a new story. Decisions added to the nearest story grew two stories to 12 criteria each (gg-ez, 2026-11-18).
 
 ### Verification markers
@@ -72,7 +73,7 @@ A bug is not a new story. Mark the criterion it breaks as failing.
 ## Fixing a bug
 
 1. Find the criterion the bug breaks. Mark it failing, with the reason. If no criterion covers the behaviour, add one to the story it belongs to.
-2. Find the root cause before changing code. Check the project's seams first: a bug where nothing errors and the old behaviour keeps showing is usually one half of a seam that did not change.
+2. Check the project's seams first: a bug where nothing errors and the old behaviour keeps showing is usually one half of a seam that did not change.
 3. Write a test that reproduces the bug and watch it fail.
 4. Fix the code until the test passes. Update the marker.
 
@@ -86,16 +87,14 @@ Never delete a story. Set `discarded: true` and add a **Discard reason** section
 
 ## Splitting a story
 
-First check the story against INVEST without "small". A story that delivers nothing alone is a task: merge it into a valuable slice instead.
-
-Then split along the usual patterns: workflow steps, operations, rule or data variations, simple before complex, performance deferred, a time-boxed spike for a big unknown. Prefer the split that lets you drop or defer a piece.
+A story that delivers nothing alone is a task: merge it into a valuable slice instead. Prefer the split that lets you drop or defer a piece.
 
 Never split by layer ("API for…", "database for…", "front end of…"). A layer delivers nothing a person notices.
 
 ## Turning a request into stories
 
 1. Find the activity. If none fits, propose a new one to the human; activities are product calls.
-2. Write the story and its rules. Ask the human only what you cannot infer, all at once.
+2. Write the story and its rules. Cite a source for each story: a document the project's `CLAUDE.md` names as a source of stories, a decision, or the human. Mark anything else as a proposal for the human. Ask the human only what you cannot infer, all at once.
 3. Add key examples where a rule is ambiguous.
 4. Fill out-of-scope and verification.
 5. Run `node <storiesDir>/stories.mjs --ready <ID>`.
@@ -109,9 +108,5 @@ Never split by layer ("API for…", "database for…", "front end of…"). A lay
 - Warnings: story text not in the persona/want/benefit shape, vague words ("fast", "easy", "intuitive"…), more than 6 criteria, dependency not yet working.
 
 Things the validator cannot see. Check them yourself when you write or edit a story:
-- A generic persona ("user") where a specific one exists.
-- A benefit that restates the want.
 - A solution in the want: button, modal, endpoint, table. Test: would the wording change if the implementation changed?
-- A horizontal slice with no observable outcome.
 - The Definition of Done leaking into criteria ("tests written", "code reviewed").
-- Over-specification: file names, algorithms or class structure without a stated reason.

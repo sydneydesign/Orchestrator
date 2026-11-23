@@ -48,39 +48,14 @@ catch (e) { block(`${STATE}.json is not valid JSON (${e.message}). Fix it before
 const git = config.git ?? {};
 const protectedBranches = git.protectedBranches ?? ["main", "master"];
 const broadAddBlocked = git.blockBroadAdd !== false;
-// The role of this session. A Claude Code subagent carries it in agent_type. An Orca worker is a
-// whole session and carries none, so the orchestrator declares it in the worker's workspace, in a
-// file named after the worker's terminal: Orca gives every terminal ORCA_TERMINAL_HANDLE, and the
-// orchestrator's own terminal has another handle, so a worker on the main checkout cannot gag it.
-function readRole(file) {
-  try { return JSON.parse(stripBom(readFileSync(file, "utf8"))); }
-  catch (e) { block(`${path.relative(root, file)} is not valid JSON (${e.message}). Fix it or delete it.`); }
-}
-function declaredRole() {
-  const handle = process.env.ORCA_TERMINAL_HANDLE;
-  const byHandle = handle && path.join(root, STATE, "roles", `${handle.replace(/[^\w.-]/g, "_")}.json`);
-  if (byHandle && existsSync(byHandle)) return readRole(byHandle);
-  // Before 0.4.0: one role.json per linked worktree. In the main checkout it would gag the orchestrator.
-  const file = path.join(root, STATE, "role.json");
-  if (!existsSync(file)) return null;
-  try {
-    const gitDir = execFileSync("git", ["rev-parse", "--absolute-git-dir"], { cwd: root, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
-    if (!gitDir.split(path.sep).join("/").includes("/worktrees/")) return null;
-  } catch { /* folder workspace: nothing to compare, trust the file */ }
-  const role = readRole(file);
-  // A copy that travelled with the branch names someone else's workspace. Ignore it.
-  return role.workspace && path.resolve(role.workspace) !== root ? null : role;
-}
-
-const declared = input.agent_type ? null : declaredRole();
-const agentType = String(input.agent_type ?? "") || String(declared?.role ?? "");
+// The role of this session: a Claude Code subagent carries it in agent_type. The main session has none.
+const agentType = String(input.agent_type ?? "");
 const inSubagent = Boolean(agentType);
 const isRole = (r) => new RegExp(`(^|:)${r}$`).test(agentType);
-// A worker's role file says whether it may write. A subagent is also held by its own tools list.
-// Without a role file, .orchestrator.json → roles.<name>.readOnly decides, then the plugin's own roles.
+// .orchestrator.json → roles.<name>.readOnly decides, then the plugin's own roles. A subagent is also
+// held by its own tools list.
 const configReadOnly = config.roles?.[agentType.replace(/^.*:/, "")]?.readOnly;
-const readOnlyRole = typeof declared?.readOnly === "boolean" ? declared.readOnly
-  : typeof configReadOnly === "boolean" ? configReadOnly
+const readOnlyRole = typeof configReadOnly === "boolean" ? configReadOnly
   : ["reviewer", "researcher", "designer"].some(isRole);
 
 // Paths are compared repo-relative, so a worktree copy of a locked file matches too.
@@ -122,15 +97,8 @@ function currentBranch(dir) {
 // ---------- SessionStart: load the procedure
 
 if (input.hook_event_name === "SessionStart") {
-  // Detected now, from this session's environment: a harness line in the ledger can be stale.
-  const orca = process.env.TERM_PROGRAM === "Orca" || Object.keys(process.env).some((k) => k.startsWith("ORCA_"));
-  const harness = orca
-    ? "Harness, detected now: Orca. Delegate through supervised workers (references/harness.md), whatever the ledger says."
-    : "Harness, detected now: plain Claude Code.";
-  // A worker's session starts before the orchestrator dispatches it, so its role is not known yet:
-  // the worker tells itself apart by its first prompt, and the Skill check below holds it.
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart",
-    additionalContext: `This project uses orchestrator. If your first prompt is an Orca worker spec or a role brief, you are that role: follow it and do not load orchestrator:orchestrate. Otherwise you are the orchestrator: load the orchestrator:orchestrate skill before any work and follow it. ${harness}` } }));
+    additionalContext: "This project uses orchestrator. You are the orchestrator: load the orchestrator:orchestrate skill before any work and follow it. Delegate through the Agent tool (references/harness.md)." } }));
   process.exit(0);
 }
 
@@ -138,7 +106,7 @@ if (input.hook_event_name === "SessionStart") {
 
 if (input.hook_event_name === "PreToolUse" && input.tool_name === "Skill" && inSubagent
   && /(^|:)orchestrate$/.test(String(input.tool_input?.skill ?? ""))) {
-  block(`you are ${agentType}, not the orchestrator. Follow your spec; ask the orchestrator through \`orca orchestration ask\` when it does not cover something.`);
+  block(`you are ${agentType}, not the orchestrator. Follow your brief; report NEEDS_CONTEXT when it does not cover something.`);
 }
 
 // ---------- PreToolUse: file edits
@@ -276,10 +244,6 @@ function checkGit(args) {
 
 const WRITERS = /^(rm|del|erase|rmdir|mv|move|cp|copy|tee|sed|truncate|remove-item|move-item|copy-item|set-content|add-content|out-file|clear-content|new-item)$/i;
 const REMOVERS = /^(rm|del|erase|rmdir|rd|mv|move|remove-item|move-item|ri|mi)$/i;
-// The values `claude --permission-mode` accepts. Hooks can report the normal mode as "default",
-// which the CLI calls "manual".
-const PERMISSION_MODES = ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"];
-const cliMode = (m) => (m === "default" ? "manual" : m);
 
 function checkPaths(tokens, dir, removes = false) {
   const base = toplevel(dir) ?? root;
@@ -302,9 +266,8 @@ function checkPaths(tokens, dir, removes = false) {
 const breakerPath = path.join(root, STATE, "work", "breaker.json");
 const maxSameFailure = config.verify?.maxSameFailure ?? 3;
 const commandKey = (c) => String(c ?? "").replace(/\s+/g, " ").trim();
-// A subagent run is its agent_id, never the session it runs in; an Orca worker is its own session, and
-// each fix round is a fresh one.
-const runId = String((input.agent_type ? input.agent_id : input.session_id) ?? "");
+// A subagent run is its agent_id, never the session it runs in.
+const runId = String(input.agent_id ?? "");
 // Searches and comparisons exit 1 when they find nothing: that is an answer, not a failure. A command
 // line exits with its last command, so that one decides. `rtk test <cmd>` wraps a real command.
 const isProbe = (c) => {
@@ -387,24 +350,6 @@ if (input.hook_event_name === "PreToolUse" && ["Bash", "PowerShell"].includes(in
       checkGit(tokens.slice(1));
       continue;
     }
-    // Orca workers run in orca.workerPermissionMode, or else in this session's mode, never in Orca's
-    // default arguments (harness.md, Placement and launch).
-    if (/^orca(\.exe)?$/i.test(tokens[0]) && tokens[1] === "worktree" && /^(rm|remove)$/.test(tokens[2] ?? "") && tokens.includes("--force")) block("orca worktree rm --force discards uncommitted work. Remove it without --force, or leave it and name it in the close report.");
-    const workerMode = cliMode(config.orca?.workerPermissionMode || input.permission_mode);
-    if (/^orca(\.exe)?$/i.test(tokens[0]) && workerMode) {
-      if (!PERMISSION_MODES.includes(workerMode)) block(`orca.workerPermissionMode "${workerMode}" is not a permission mode (${PERMISSION_MODES.join(", ")}). Fix .orchestrator.json.`);
-      const want = `--permission-mode ${workerMode}`;
-      const from = config.orca?.workerPermissionMode ? "orca.workerPermissionMode" : "this session's mode";
-      if (tokens[1] === "orchestration" && tokens[2] === "worker-start" && tokens.includes("--agent")) block(`launch the worker's terminal yourself with \`orca terminal create --command "claude ${want}"\`, then \`worker-start --terminal <handle>\`. --agent uses Orca's default arguments.`);
-      const cmd = tokens[tokens.indexOf("--command") + 1] ?? "";
-      if (tokens[1] === "terminal" && tokens[2] === "create" && /(^|[;&|]\s*)claude\b/i.test(cmd) && !cmd.includes(want)) block(`start the worker in ${from}: --command "claude ${want}".`);
-    }
-    // dispatch.mjs opens the terminal itself, out of the guard's sight: hold its --mode to the same rule.
-    if (/^node(\.exe)?$/i.test(tokens[0]) && /orchestrate[\\/]scripts[\\/]dispatch\.mjs$/i.test(tokens[1] ?? "")) {
-      if (inSubagent) block("role agents do not dispatch workers. Report what you need to the orchestrator.");
-      const given = tokens[tokens.indexOf("--mode") + 1];
-      if (!config.orca?.workerPermissionMode && workerMode && tokens.includes("--mode") && cliMode(given) !== workerMode) block(`dispatch workers in this session's mode: --mode ${workerMode}.`);
-    }
     if (/^gh$/i.test(tokens[0]) && /^pr$/i.test(tokens[1] ?? "") && /^merge$/i.test(tokens[2] ?? "")) {
       if (inSubagent) block("role agents never merge. The product owner merges, or asks the orchestrator to.");
       if (git.allowPush === false) confirm("git.allowPush is false in this project, so every merge needs the product owner's confirmation.");
@@ -428,8 +373,8 @@ if (input.hook_event_name === "PreToolUse" && ["Bash", "PowerShell"].includes(in
 }
 
 // ---------- Stop and SubagentStop: the builder does not stop on red
-// SubagentStop fires for a Claude Code subagent; Stop fires at the end of a turn, which is how an
-// Orca worker finishes. In the orchestrator's own session there is no role, so Stop exits at once.
+// SubagentStop fires for a Claude Code subagent. In the orchestrator's own session there is no role,
+// so Stop exits at once.
 
 if (input.hook_event_name === "SubagentStop" || input.hook_event_name === "Stop") {
   // A detached HEAD holds commits no branch carries: the merge of the branch would bring none of them.
@@ -446,19 +391,8 @@ if (input.hook_event_name === "SubagentStop" || input.hook_event_name === "Stop"
   if (changed.length) block(`these locked or orchestrator-owned files differ from HEAD: ${changed.join(", ")}. Restore them with \`git restore <file>\`, then report what you needed to change them for.`);
   // A commit made through an interpreter leaves the tree equal to HEAD. The orchestrator commits each
   // lock, so the last commit that touched the lock list is the base the locked files must still match.
-  // When the role file names the commit the builder started from, only the builder's own commits
-  // count: a merge, a commit made outside the flow, or the orchestrator's lock commit (it changes the
-  // lock list) is not the builder's to answer for.
-  const start = declared?.base;
-  const base = start || run(["log", "-1", "--format=%H", "--", `${STATE}/locked-tests.txt`]);
-  let committed = [];
-  if (start) {
-    for (const sha of names(["log", "--no-merges", "--format=%H", `${start}..HEAD`, "--", ...lockSet])) {
-      const files = names(["show", "--format=", "--name-only", sha]);
-      if (!files.some((f) => key(f) === LOCK_REL)) committed.push(...files.filter((f) => locked.has(key(f))));
-    }
-    committed = [...new Set(committed)];
-  } else if (base) committed = names(["diff", "--name-only", base, "HEAD", "--", ...lockSet]);
+  const base = run(["log", "-1", "--format=%H", "--", `${STATE}/locked-tests.txt`]);
+  const committed = base ? names(["diff", "--name-only", base, "HEAD", "--", ...lockSet]) : [];
   if (committed.length && !input.stop_hook_active) block(`locked files were committed after the lock (${base.slice(0, 7)}): ${committed.join(", ")}. Do not undo it yourself. Report BLOCKED and name these files and the commit.`);
   if (input.stop_hook_active) process.exit(0); // One retry for the verification commands; then the builder reports honestly.
   const deadline = Date.now() + 1000 * 1000; // Stay inside the hook timeout in hooks.json.

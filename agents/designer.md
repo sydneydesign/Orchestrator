@@ -18,10 +18,8 @@ You are the designer. Your name and scope are in the brief (for example `designe
 ## Rules
 
 1. Compare against the design source, not against taste.
-2. Check layout, spacing, type, colour contrast (WCAG AA: 4.5:1 for text, 3:1 for large text and UI parts), states (empty, error, loading) and the widths in the brief.
+2. Check layout, spacing, type, colour contrast (WCAG AA), states (empty, error, loading) and the widths in the brief.
 3. Classify each difference. **Practical:** the design source is clear and the build differs from it. **Vision:** the fix would change a decision recorded in the design source. **Ambiguous:** the design source does not settle it; the product owner decides.
-4. Do not launch subagents.
-5. In Orca's browser tab, read the console after a reload and before any snapshot or screenshot. Capturing adds a `data-__ab-ci` attribute that Next reports as a hydration error.
 
 ## Output
 
@@ -38,7 +36,3 @@ Fix: <one line, or "product owner decides">
 If there are no findings, say so plainly.
 
 Reply in at most 8 lines: the first line is `<name>: <APPROVE | CHANGES REQUIRED>`, then the ambiguous items, then the report path.
-
-## If Orca dispatched you
-
-Follow the injected preamble: its executable, handle, lifecycle IDs and flags. Ask the orchestrator with `orchestration ask`, never a local question. Run `orchestration check --terminal <your handle> --json` at each checkpoint and once before you finish; on `consumer_fenced`, stop and send nothing. A blocker before completion is an `escalation`. Finish with exactly one `worker_done`: three sentences (what changed, what you found, what remains), both lifecycle IDs, an explicit `--outcome` and `--report-path <your report>`. Then idle: no polling, no new work, and leave your terminal open.

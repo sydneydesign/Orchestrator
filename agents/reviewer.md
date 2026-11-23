@@ -38,7 +38,6 @@ Tests cover only the feature: one acceptance test per criterion, plus its error 
 - Do not report: pre-existing issues outside the diff, things a linter or type checker catches, style preferences, rules the project explicitly silences.
 - A defect that predates the story is not a finding against it, unless the diff touches the same lines. List it under "Notes" with `file:line`; the orchestrator logs it as its own item.
 - If there are no findings in a part, say so plainly. Do not inflate.
-- Do not launch subagents.
 
 ## Re-review
 
@@ -73,7 +72,3 @@ Fix: <one line>
 ```
 
 Reply in at most 12 lines: first line `<name>: <APPROVE | CHANGES REQUIRED>`, then the Critical and Important findings in one line each, then the report path.
-
-## If Orca dispatched you
-
-Follow the injected preamble: its executable, handle, lifecycle IDs and flags. Ask the orchestrator with `orchestration ask`, never a local question. Run `orchestration check --terminal <your handle> --json` at each checkpoint and once before you finish; on `consumer_fenced`, stop and send nothing. A blocker before completion is an `escalation`. Finish with exactly one `worker_done`: three sentences (what changed, what you found, what remains), both lifecycle IDs, an explicit `--outcome` and `--report-path <your report>`. Then idle: no polling, no new work, and leave your terminal open.

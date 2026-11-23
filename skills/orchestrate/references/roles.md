@@ -14,21 +14,6 @@ If none applies, do not create a role. Load the relevant skill into the builder,
 
 A finding that recurs across reviews also signals a missing role.
 
-## Examples by signal
-
-These are examples, not a list to pick from. Read the project and decide.
-
-| Signal in the project | Possible role |
-|---|---|
-| Legal pages, contracts, privacy, regulated data | `legal-reviewer` |
-| Public UI with accessibility obligations | `accessibility-auditor` |
-| Auth, payments, personal data, file uploads | `security-reviewer` |
-| Database schema, migrations, analytics | `data-engineer` |
-| Several UI languages | `translator` |
-| Search traffic matters | `seo-reviewer` |
-| A specialised domain (medical, finance, education) | `<domain>-expert` |
-| Infrastructure, deploys, CI | `ops` |
-
 ## Creating a role
 
 1. Write `.claude/agents/<role>.md` in the project from `role-template.md` (next to this file). Project roles live in the project, not in the plugin.

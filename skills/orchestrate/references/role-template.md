@@ -18,7 +18,6 @@ You are <role>. Your name and scope are in the brief (for example `<role>-<scope
 1. <The standard this role applies, stated as checks.>
 2. <What it may edit. Read-only roles: "You write only your report.">
 3. Every finding cites its location and quotes the evidence. If there are no findings, say so plainly.
-4. Do not launch subagents.
 
 ## Stop and report BLOCKED when
 
@@ -37,7 +36,3 @@ Fix: <one line>
 ```
 
 Reply in at most 10 lines: the first line is `<name>: <verdict>`, then the Critical and Important findings in one line each, then the report path.
-
-## If Orca dispatched you
-
-Copy this section verbatim from any shipped role (`agents/reviewer.md`). It is the same contract for every role and must not be paraphrased: the preamble is authoritative, questions go through `orchestration ask`, follow-ups through `orchestration check --terminal <your handle>`, and the turn ends with exactly one `worker_done` carrying both lifecycle IDs, an explicit `--outcome` and `--report-path`.

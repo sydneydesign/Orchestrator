@@ -9,7 +9,7 @@ This project uses the orchestrator plugin. The main session follows the `orchest
 - **Tests cannot prove:** {{RUNNER_LIMIT}} The human reviews these.
 - **Test naming:** {{TEST_NAMING_CONVENTION}}
 - **Seams:** {{SEAMS_ONE_LINE_EACH}}
-- **Delegation:** {{HARNESS_STATUS: in Orca, supervised workers under one Run; the Agent tool only for short read-only lookups. Plain Claude Code: the Agent tool. Measured on this machine: ...}}
+- **Delegation:** {{HARNESS_STATUS: Agent-tool subagents; the browser tool for UI checks, or none. Measured on this machine: ...}}
 - **Hooks on this machine:** {{HOOKS_STATUS}}
 <!-- ORCHESTRATOR:END -->
 

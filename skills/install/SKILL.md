@@ -21,7 +21,7 @@ Run `claude plugin list --json` and read the scope of `orchestrator@orchestrator
 If the scope is `user`, the plugin loads in every project on this machine. Ask the human once: "Keep orchestrator in every project, or only in this one?"
 
 - **Every project:** go to step 1.
-- **Only this one:** use `project` scope. It writes `.claude/settings.json`, which git shares, so every worktree of the repository loads the plugin, and so does every teammate. Do not use `local` in Orca: it writes `.claude/settings.local.json` in this folder only, and a worker in its own worktree would run without the guard. Use `local` only in plain Claude Code, and only when the human does not want the setting committed. Then run, from the repo root:
+- **Only this one:** use `project` scope. It writes `.claude/settings.json`, which git shares, so every worktree of the repository loads the plugin, and so does every teammate. Use `local` only when the human does not want the setting committed: it writes `.claude/settings.local.json` in this folder only. Then run, from the repo root:
 
 ```
 claude plugin install orchestrator@orchestrator-local --scope project
@@ -37,14 +37,14 @@ Tell the human to restart the CLI after the install, and continue with step 1.
 Run things. Do not read them off `package.json` or a README.
 
 1. **Verification commands.** Find the lint, typecheck, test and build commands. Run each one. Record the exact command, the time it took, and whether it was already red before any change. A command that does not run is not a plug.
-2. **Test runner and report.** Find how to get a machine-readable result: Jest/Vitest `--reporter=json --outputFile=<file>`, or JUnit XML (pytest `--junitxml`, Go `go-junit-report`, most CI runners). Run it once.
+2. **Test runner and report.** Find how the runner writes a machine-readable result (JSON or JUnit XML). Run it once.
 3. **Runner limit.** Write a three-line test that checks something the runner cannot see (rendering, layout, a real network call, a real browser). Run it and watch it fail or pass vacuously. Record in one sentence what the tests cannot prove. The human reviews everything that sentence lists.
 4. **Seams.** Find pairs of places that must change together with nothing in the language tying them: twin files, two emitters of the same data, a hand-written list mirroring another, a type mirroring an external constraint, a version bumped in two places, a whitelist of modules, two scripts writing the same file. For each seam pick one watcher: a test, deriving one side from the other, or a named person. Prove each TEST watcher once: break one side on purpose, run the watcher, confirm it fails, then revert. A watcher that stays green is ❌ in the install report; fix it or pick another watcher.
 5. **Mutation (optional).** If the project already has a mutation tool, or one installs without new infrastructure for its stack, record a command that mutates only the changed files as `verify.mutation`. Otherwise remove the key. Do not add a tool only for this.
 6. **Language.** Detect the language of the project's docs and UI. If they disagree, ask the human once.
 7. **Roster.** Pick the roles the project needs with the tests in the `orchestrate` skill's `references/roles.md`. Write project roles into `.claude/agents/` from `references/role-template.md`. List each role with one line on why it exists.
 
-Ask the human only what you cannot measure, all at once: the product's personas, the release names, the risk tags that matter, the code owner if any, and whether agents may check the UI in a browser during the build. If yes, also ask which test data agents may touch. The `ui` key is that permission: remove it when the answer is no. In Orca, also ask which permission mode the workers launch in; `bypassPermissions` means they never stop to ask. That answer is `orca.workerPermissionMode`: remove the key when the workers should run in the orchestrator's own mode.
+Ask the human only what you cannot measure, all at once: the product's personas, the release names, the risk tags that matter, the code owner if any, and whether agents may check the UI in a browser during the build. If yes, also ask which test data agents may touch. The `ui` key is that permission: remove it when the answer is no.
 
 ## Step 2: write `.orchestrator.json`
 
@@ -73,7 +73,7 @@ Insert `assets/claude-md-block.md`, filled and translated, into the root `CLAUDE
 
 ## Step 5: prepare git
 
-1. Create `.orchestrator/` with an empty `locked-tests.txt` and a `state.md` that says "No work in progress." Add `.orchestrator/work/`, `.orchestrator/roles/` and `.orchestrator/role.json` to `.gitignore`; keep `locked-tests.txt` and `state.md` tracked. A role file belongs to one worker's terminal and must never travel with a branch.
+1. Create `.orchestrator/` with an empty `locked-tests.txt` and a `state.md` that says "No work in progress." Add `.orchestrator/work/` to `.gitignore`; keep `locked-tests.txt` and `state.md` tracked.
 2. If several people share the repository, offer the human the optional GitHub settings in the `orchestrate` skill's `references/git.md`. Do not apply them yourself.
 
 ## Step 6: verify the install
@@ -83,11 +83,7 @@ Insert `assets/claude-md-block.md`, filled and translated, into the root `CLAUDE
 - Every path cited in the `CLAUDE.md` block exists.
 - `node <storiesDir>/stories.mjs --tests --check` passes. CI runs the same command.
 - The guard is active: ask the human to try `git push --force` in a fresh session and confirm it is blocked. If hooks do not run on this machine, record it in the `CLAUDE.md` block; the agents still carry the same rules in their prompts.
-- **The delegation mechanism works.** Prove the chain once, now, with the smallest real delegation, not by reading the documentation. In plain Claude Code: one Agent-tool subagent that returns a report file. In Orca:
-  1. Check what can stop a worker before its turn, in the Claude profile Orca launches with (`claude-profiles/<id>/home/.claude.json` under Orca's app data folder when it exists, otherwise `~/.claude.json`). `projects.<path>.hasTrustDialogAccepted` should be true for the repository and for Orca's worktree folder; a trusted parent is not proof. With `orca.workerPermissionMode: bypassPermissions`, `skipDangerousModePermissionPrompt` must be true, or the human accepts the warning once in an Orca Claude tab. Tell the human what is missing; never write these keys yourself unless the human asks.
-  2. Bind a Run and launch a throwaway `researcher` on `current` with `dispatch.mjs`. Its brief: run `echo probe > guard-probe.txt`, report the output, send `worker_done`.
-  3. The worker must appear in `orca orchestration worker-list --run <id> --json`, and `worker-read` must show the guard's `orchestrator: researcher is read-only` message. If `guard-probe.txt` appears instead, delete it: the workers run without the plugin (check its install scope) or without their role file. The install is not done.
-  4. If the worker stops at a launch prompt, do not answer it: show it to the human. Release the worker and close its terminal.
+- **The delegation mechanism works.** Prove the chain once, now, with the smallest real delegation, not by reading the documentation. Launch a throwaway `orchestrator:researcher` subagent. Its brief: run `echo probe > guard-probe.txt`, report the output, and write a report file. Its report must show the guard's `orchestrator: researcher is read-only` message. If `guard-probe.txt` appears instead, delete it: the plugin does not load for subagents here (check its install scope). The install is not done.
 
   Record the result in the `CLAUDE.md` block's **Delegation** line. A mechanism nobody has exercised is not installed.
 

@@ -119,7 +119,7 @@ For visual work you want to iterate on quickly, ask for **exploration**. The orc
 
 At the end of a block of work the orchestrator runs the full verification, writes lessons from real failures into `CLAUDE.md`, and cleans up without being asked: it stops its agents, keeps `state.md` to the current state, and runs `tidy.mjs`. Then it gives you one batched list: bad news first, decisions it made, and branches waiting to be pushed or merged.
 
-`tidy.mjs` shows a preview, then deletes the work folders of closed blocks, local branches already merged into the main branch (with their clean worktrees), and the caches you list in `tidy.caches`. It keeps a work folder that a tracked file or `state.md` still names, a branch with no commits of its own, a worktree with uncommitted changes, and any tracked file. If a close was skipped, the next session starts with one line saying what was left behind.
+`tidy.mjs` shows a preview, then deletes the work folders of closed blocks, local branches already merged into the main branch (with their clean worktrees), and the caches you list in `tidy.caches`. It keeps a work folder that any file in the repository (a doc, a project skill, a new story not yet committed) or `state.md` still names, a branch that never had commits of its own, a branch its upstream lacks, a worktree with uncommitted changes or with reports in its own work folder, and any tracked file. Pass `--keep <folder or branch>` for work still in progress. If a close was skipped, the next session starts with one line saying what was left behind.
 
 ## Stories
 
@@ -226,6 +226,8 @@ These are a starting set. The orchestrator creates a project role when a job nee
 ## Upgrading
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the changes in each version. After an update, restart the CLI.
+
+**From 0.10.0 to 0.10.1.** Nothing to change. A project with its own copy of `tidy.mjs` copies it again: 0.10.0 could delete a fresh branch and miss some citations.
 
 **From 0.9.x to 0.10.0.** Nothing to change. Optionally add `"tidy": { "caches": [...] }` to `.orchestrator.json` for caches the close should clear. A project that keeps its own copy of the plugin's procedure and guard ports `scripts/tidy.mjs` and the guard's session-start note by hand.
 

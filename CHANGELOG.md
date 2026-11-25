@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.1 — 2026-11-25
+
+Fixes to `tidy.mjs` from Easy One's review of its port.
+
+- A branch counts as merged only if it ever had commits of its own, so a branch created for a builder that has not committed yet stays, and a fast-forward merge is no longer missed.
+- A work folder stays when a project skill under `.claude/` or a new, uncommitted file cites it. Names in `state.md` match whole names only.
+- A worktree with reports in its own `.orchestrator/work/`, or a branch its upstream lacks, stays.
+- Preview and the session-start note change nothing (`git worktree prune` runs only with `--run`). `--keep` also takes a branch.
+
 ## 0.10.0 — 2026-11-25
 
 The close cleans up after itself. In Easy One the clean-up rules existed as text and were skipped whenever the close was: 85 MB of work files, 29 merged branches, 122 committed screenshots and nine links into deleted folders piled up.

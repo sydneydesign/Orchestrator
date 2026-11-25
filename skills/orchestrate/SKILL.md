@@ -47,7 +47,7 @@ Who does it, first match wins:
    - Two or more stories with disjoint files, no shared seam and no `depends_on` between them → parallel builders, one workspace and branch each (isolated profile). Check file overlap before launching.
    - Several stories for one builder: the brief asks for one commit per criterion that turns green, so work survives a run that ends early.
 
-**Exploration.** When the human wants to see a change and iterate on it fast (a layout, a flow, wording, a configuration), offer exploration. You edit directly on an `explore/<topic>` branch while the human watches the result. There is no builder, no reviewer and no new story, and locked tests may fail. Report each change in one line. When the human says the result stays, formalize it in one pass: stories, tests, one review. A builder-then-reviewer cycle for every small adjustment was too slow (Easy One, 2026-10-26).
+**Exploration.** When the human wants to see a change and iterate on it fast (a layout, a flow, wording, a configuration), offer exploration. You edit directly on an `explore/<topic>` branch while the human watches the result. There is no builder, no reviewer and no new story, and locked tests may fail. Report each change in one line. When the human says the result stays, formalize it in one pass: stories, tests, one review. The options the human did not keep leave the code in that same pass; git history keeps them. Screenshots stay in `.orchestrator/work/<scope>/` and never enter git: the approved look is the commit. Discarded variants and committed screenshots each needed their own clean-up later (Easy One, 122 files on 2026-11-24). A builder-then-reviewer cycle for every small adjustment was too slow (Easy One, 2026-10-26).
 
 **One story at a time** when the human refines work with you. Finish the current story's criteria and get the human's approval before you start the next one. Before you start a new piece, check which story and criterion it serves. If it belongs to another story, ask first (Easy One, 2026-11-03).
 
@@ -81,13 +81,14 @@ Done when: <the check that proves it, with the exact command>
 Budget: write your report before about <N> tool calls, even if work remains
 Write your full output to: <absolute path>/.orchestrator/work/<scope>/<role>.md
 Escalate instead of guessing when: <the open points you can foresee>
+Leave nothing running: stop every process you started before you report.
 ```
 
 Pass the story file path, never a paraphrase. A paraphrase changes the criteria the agent works from.
 
 Set the budget below the role's turn limit (builder: 150). A builder with many stories ran out of turns without a report twice (gg-ez, 2026-11-18).
 
-A UI brief names in `Constraints:` the project's existing primitives to use ("primitives: ui/tooltip, ui/dialog"). Search the project's UI folder before you write the brief: builders wrote 16 native `title` tooltips while `ui/tooltip` was installed (gg-ez, 2026-11-18).
+A UI brief names in `Constraints:` the project's existing primitives to use ("primitives: ui/tooltip, ui/dialog"). Search the project's UI folder before you write the brief: builders wrote 16 native `title` tooltips while `ui/tooltip` was installed (gg-ez, 2026-11-18). It points at the approved design by commit or tag, never at values copied into the brief: a designer built from a brief's sizes instead of the approved screen (Easy One, 2026-11-03). When the work needs a part the system lacks (a component, a token, a style), the agent stops and asks; it never invents one. Agents invented tokens, styles and components that already existed four times (Easy One, 2026-11-13 to 11-24).
 
 A brief that writes product documentation (reference docs, code comments that a site shows, a design-system page) says: the documentation states what the product is. Decisions, who decided, dates, proposals and open points stay in the decisions and the ledger. Internal narration in generated docs was rejected outright (Easy One, 2026-11-11).
 
@@ -178,7 +179,8 @@ Read `references/git.md`. In short: one branch per story, one worktree per paral
 
 At the end of a block of work:
 1. Run `verify.all` from `.orchestrator.json` once for the block, then `node <storiesDir>/stories.mjs --tests`. Builders run only the fast `verify.onBuilderStop`; the full set runs here, or in CI.
-2. Settle the helpers: every agent you launched has reported, and every writer worktree is removed or named in the report. Do not end the turn before that.
+2. Settle the helpers: stop each agent with TaskStop as soon as you have read its report, so nothing keeps running. Every agent you launched has reported, and every writer worktree is removed or named in the report. Do not end the turn before that.
 3. Write the lessons into the `Lessons` section of `CLAUDE.md`, or into the file of the role that failed. A lesson enters only if a real failure in this project caused it; note that failure in one line next to the rule. One rule, one home: never copy a rule into a second file. Remove a lesson when code now prevents its failure (`references/harness.md`, **Enforced by code**).
-4. Update `.orchestrator/state.md`.
-5. Give the human the batched review list: one line per item, bad news first. Include the roles you created or retired, your technical rulings, and any UI check that was skipped. Name every branch with commits that are not on the remote, with its count, and every finished story branch that is not merged. Ask once whether to push and merge them; work that lives on one machine only is lost with it.
+4. Rewrite `.orchestrator/state.md` to the current state only, about 50 lines: in progress, open rulings, pending with the human. The history lives in git. A 640-line ledger had piled up (Easy One, 2026-11-19).
+5. Tidy, without being asked. First move what must last out of `.orchestrator/work/` (a report that a story or decision cites goes to the project's docs, and the link follows it). Then run `node <this skill's directory>/scripts/tidy.mjs`, read the preview, and run it again with `--run`, adding `--keep <scope>` for work still in progress. It deletes the closed work folders, the local branches merged into the main branch with their clean worktrees, and the caches listed in `.orchestrator.json` → `tidy.caches`. It keeps a folder a tracked file still cites, and a worktree with changes; deal with what it names. Rules alone did not hold: 85 MB of work files, 29 merged branches and nine links into deleted folders piled up (Easy One, 2026-11-19 and 11-20).
+6. Give the human the batched review list: one line per item, bad news first. Include the roles you created or retired, your technical rulings, and any UI check that was skipped. Name every branch with commits that are not on the remote, with its count, and every finished story branch that is not merged. Ask once whether to push and merge them; work that lives on one machine only is lost with it.

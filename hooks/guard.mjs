@@ -9,6 +9,7 @@ import { execFileSync, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const WIN = process.platform === "win32";
 // Windows and a default macOS volume (APFS) ignore case: Tests/a.test.js and tests/a.test.js are one file.
@@ -97,8 +98,15 @@ function currentBranch(dir) {
 // ---------- SessionStart: load the procedure
 
 if (input.hook_event_name === "SessionStart") {
+  // A session started as a role (claude --agent orchestrator:builder) already has its contract.
+  if (inSubagent) process.exit(0);
+  let debt = "";
+  try {
+    debt = execFileSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "skills", "orchestrate", "scripts", "tidy.mjs"), "--summary"],
+      { cwd: root, stdio: ["ignore", "pipe", "ignore"], timeout: 8000 }).toString().trim();
+  } catch {}
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart",
-    additionalContext: "This project uses orchestrator. You are the orchestrator: load the orchestrator:orchestrate skill before any work and follow it. Delegate through the Agent tool (references/harness.md)." } }));
+    additionalContext: "This project uses orchestrator. You are the orchestrator: load the orchestrator:orchestrate skill before any work and follow it. Delegate through the Agent tool (references/harness.md)." + (debt ? ` ${debt}` : "") } }));
   process.exit(0);
 }
 
@@ -266,8 +274,9 @@ function checkPaths(tokens, dir, removes = false) {
 const breakerPath = path.join(root, STATE, "work", "breaker.json");
 const maxSameFailure = config.verify?.maxSameFailure ?? 3;
 const commandKey = (c) => String(c ?? "").replace(/\s+/g, " ").trim();
-// A subagent run is its agent_id, never the session it runs in.
-const runId = String(input.agent_id ?? "");
+// A subagent run is its agent_id, never the session it runs in. A session started as a role
+// (claude --agent) has no agent_id: the session is the run.
+const runId = String(input.agent_id ?? (inSubagent ? input.session_id ?? "" : ""));
 // Searches and comparisons exit 1 when they find nothing: that is an answer, not a failure. A command
 // line exits with its last command, so that one decides. `rtk test <cmd>` wraps a real command.
 const isProbe = (c) => {

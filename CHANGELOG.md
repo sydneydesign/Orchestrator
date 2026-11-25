@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.0 — 2026-11-25
+
+The close cleans up after itself. In Easy One the clean-up rules existed as text and were skipped whenever the close was: 85 MB of work files, 29 merged branches, 122 committed screenshots and nine links into deleted folders piled up.
+
+- `scripts/tidy.mjs` deletes the work folders of closed blocks, the local branches merged into the main branch with their clean worktrees, and the caches listed in `.orchestrator.json` → `tidy.caches`. It previews by default, keeps a work folder a tracked file still cites and a worktree with changes, and never forces anything. The close runs it without asking.
+- The orchestrator's session start names what earlier blocks left behind.
+- The close stops each agent once its report is read, and rewrites `state.md` to about 50 lines of current state. Every brief says "leave nothing running".
+- Screenshots stay in `.orchestrator/work/` and never enter git. The options the human did not keep leave the code when an exploration is formalized.
+- A UI brief points at the approved design by commit or tag, never at copied values, and an agent stops instead of inventing a missing component, token or style.
+- A session started as a role (`claude --agent orchestrator:builder`) gets no orchestrator prompt at its start, and the same-failure breaker counts its session as the run.
+
 ## 0.9.0 — 2026-11-23
 
 Orca is retired. Orca's own orchestration guide (CLI 1.4.271) conflicted with the plugin: it launches workers with `worker-start --agent`, which the guard blocked; it can open a worker as a chat with no terminal, so the guard could not find the worker's role; and it creates worker worktrees itself.

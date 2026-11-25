@@ -17,7 +17,7 @@
 - One PR per story, or one per block in the live profile.
 - Title: plain words a person understands without the story, for example "Members can reset their password". No story IDs in the title.
 - Body: what changed and what the reviewer must know, first and short. Then the output of `node <storiesDir>/stories.mjs --pr <ID>` for each story, the review summary and any ⚠️ manual steps.
-- When something visible changes, add before and after screenshots.
+- When something visible changes, add before and after screenshots to the pull request description, never to the repository.
 - Create with `gh pr create` only after the human approves the push.
 - Merge only on the human's OK. If the project names a code owner (`git.codeOwner`), the PR goes to them for review.
 

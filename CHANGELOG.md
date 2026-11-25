@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.11.1 — 2026-11-25
+
+Guard fixes from Easy One's port of 0.11.0 and two code reviews, each case reproduced first.
+
+- The guard follows `cd` along a command line: `cd tests && rm a.test.js` was checked in the wrong folder and deleted a locked test. A `cd` it cannot follow (a variable, `cd -`, `popd`, inside a subshell, a pipeline or the background) makes later relative paths unknown, so a write that could reach a guarded file asks. A script handed to `bash -c` keeps its own folder.
+- Variables: a value from `$(...)`, a backtick, a subshell or a pipeline, or a quote inside it, stays unresolved, and so do loop variables, `read`, `+=` and `printf -v`. `export D="x"` is read whole. `$PWD` is the shell's folder, not the hook's.
+- A `..` after a variable, or anywhere on a line with an unresolved variable, asks instead of passing.
+- Commands inside `do`, `then`, `else`, `{` and `!` are checked; they were skipped.
+- The body of a `cat` or `tee` heredoc is text, not commands: HTML with `>` in it no longer blocks. A `<<<` here-string or a `<<` inside quotes is not taken for one.
+- A read-only role cannot write through an unresolved variable even under the temp folder: the variable could hold `../`. `$null` is the null device.
+
+Roles:
+
+- Every brief tells the agent to search with grep, rg or find through Bash when its session has no Grep or Glob tool. Some Claude Code versions have neither: an Easy One designer called Grep twice and got «No such tool available». The roles keep listing them for the versions that have them.
+- The copywriter gets Bash and PowerShell, so it can search on those versions too. The guard holds its writes as before.
+- The brief tells every role three more things it never read in `harness.md`: the server URL the orchestrator started (never start one), scratch files in the scratchpad (never new files in the repository), and Edit or Write instead of `sed -i`. From Easy One's sessions of 25 November.
+
 ## 0.11.0 — 2026-11-25
 
 Builders can run in their own Orca terminal, so the human watches them work. Orca is only the place a builder runs: the plugin launches it with its role, and the guard holds it as it holds a subagent.

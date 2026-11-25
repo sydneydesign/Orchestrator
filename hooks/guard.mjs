@@ -38,6 +38,8 @@ function toplevel(dir) {
 
 // The checkout the session works in. A worktree has its own toplevel and its own branch.
 const root = toplevel(cwd) ?? path.resolve(process.env.CLAUDE_PROJECT_DIR || cwd);
+// The folder a shell command runs in so far: the session's, then wherever a cd on the line moved it.
+let here = cwd;
 // Projects installed before the rename keep .orquestador.json and .orquestador/ until they migrate.
 const STATE = existsSync(path.join(root, ".orchestrator.json")) || !existsSync(path.join(root, ".orquestador.json")) ? ".orchestrator" : ".orquestador";
 const configPath = path.join(root, `${STATE}.json`);
@@ -154,21 +156,31 @@ if (input.hook_event_name === "PreToolUse" && ["Edit", "Write", "MultiEdit", "No
 
 // Split a command line into simple commands. Quoted text is kept apart: it is checked as a command
 // of its own when it is itself a git or shell call, or the script a shell runs (bash -c "...").
-function commands(line) {
+let groupSeq = 0;
+function commands(line, group = 0) {
   const quoted = [];
   // The shell leaves $ inside single quotes alone: \x01 marks it so the variable expansion leaves it too.
   const bare = line.replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g, (_, d, s) => { quoted.push(d ?? s.replace(/\$/g, "\x01")); return ` __Q${quoted.length - 1}__ `; });
   const scripts = new Set([...bare.matchAll(/(?:^|[\s\\/;&|(])(?:bash|sh|zsh|pwsh|powershell|cmd)(?:\.exe)?\s+(?:-\w*c|-command|\/c)\s+__Q(\d+)__/gi)].map((m) => +m[1]));
+  const runs = (i) => scripts.has(i) || /^\s*(\S*[\\/])?git(\.exe)?\s/i.test(quoted[i]) || /^\s*(bash|sh|pwsh|powershell)\b/i.test(quoted[i]);
   const out = [];
-  for (const seg of bare.split(/&&|\|\||;|\||&|\n|\$\(|`|\(|\)/)) {
-    const tokens = seg.trim().split(/\s+/).filter(Boolean);
+  // .sub: the segment runs in a subshell, $(...), a backtick, a pipeline or the background, so a cd there
+  // does not move the commands after it.
+  const parts = bare.split(/(&&|\|\||;|\||&|\n|\$\(|`|\(|\))/);
+  let depth = 0, tick = false;
+  for (let k = 0; k < parts.length; k += 2) {
+    const before = parts[k - 1] ?? "", after = parts[k + 1] ?? "";
+    if (before === "(" || before === "$(") depth++;
+    if (before === "`") tick = !tick;
+    const tokens = parts[k].trim().split(/\s+/).filter(Boolean);
     // .bare keeps the quotes out: a > inside a quoted argument is text, not a redirection.
     const restore = (t) => t.replace(/__Q(\d+)__/g, (_, i) => quoted[i]);
-    if (tokens.length) out.push(Object.assign(tokens.map(restore), { bare: tokens, restore }));
+    const sub = depth > 0 || tick || [before, after].some((d) => d === "|" || d === "&");
+    if (tokens.length) out.push(Object.assign(tokens.map(restore), { bare: tokens, restore, sub, group }));
+    // A script handed to a shell or to git is checked where it runs, as its own group.
+    for (const m of parts[k].matchAll(/__Q(\d+)__/g)) if (runs(+m[1])) out.push(...commands(quoted[+m[1]].replace(/\x01/g, "$"), ++groupSeq).map((c) => Object.assign(c, { parent: c.parent ?? group })));
+    if (after === ")" && depth > 0) depth--;
   }
-  quoted.forEach((q, i) => {
-    if (scripts.has(i) || /^\s*(\S*[\\/])?git(\.exe)?\s/i.test(q) || /^\s*(bash|sh|pwsh|powershell)\b/i.test(q)) out.push(...commands(q.replace(/\x01/g, "$")));
-  });
   return out;
 }
 
@@ -179,10 +191,23 @@ const MENTIONS_GIT = /(^|[^\w-])git(?![\w-])/i;
 // The bodies of the heredocs fed to an interpreter in a command line: the text that program runs.
 function interpreterHeredocs(line) {
   const bodies = [];
-  for (const m of line.matchAll(/^([^\n]*)<<-?[ \t]*(['"]?)(\w+)\2[^\n]*\n([\s\S]*?)\n[ \t]*\3[ \t]*$/gm)) {
+  for (const m of line.matchAll(/^([^\n]*?)(?<!<)<<(?!<)-?[ \t]*(['"]?)(\w+)\2[^\n]*\n([\s\S]*?)\n[ \t]*\3[ \t]*$/gm)) {
     if (m[1].split(/&&|\|\||;|\|/).some((seg) => INTERPRETERS.test(seg.trim().split(/\s+/)[0] ?? ""))) bodies.push(m[4]);
   }
   return bodies.join("\n");
+}
+// Heredocs that only write text: `cat > f <<E` or `tee f <<E`, with no pipe after it. Their body is data
+// (HTML with >, a script saved to run later), never commands.
+// (Easy One, 2026-11-25: a measuring page written with cat was blocked over the > in its HTML.)
+function splitDataHeredocs(line) {
+  const rest = line.replace(/^([^\n]*?)(?<!<)<<(?!<)-?[ \t]*(['"]?)(\w+)\2([^\n]*)\n([\s\S]*?)\n[ \t]*\3[ \t]*$/gm, (all, head, q, tag, after, body) => {
+    // A << inside quotes or a comment is no heredoc: then the lines after it are commands.
+    if (/['"#`]/.test(head)) return all;
+    const seg = head.split(/&&|\|\||;|\||\(/).at(-1).trim();
+    if (!/^(cat|tee)$/.test(seg.split(/\s+/)[0] ?? "") || /\|/.test(after)) return all;
+    return `${head}<<${q}${tag}${q}${after}`;
+  });
+  return { rest };
 }
 const isGit = (t) => /(^|[\\/])git(\.exe)?$/i.test(t);
 // The index of the subcommand in git's arguments, after its global options (-C dir, -c key=value).
@@ -204,7 +229,7 @@ function checkGit(args) {
   const has = (re) => rest.some((a) => re.test(a));
   // Only a global -C names the folder: `git commit -C <commit>` reuses a message.
   const globalC = args.slice(0, i).indexOf("-C");
-  const dirArg = globalC >= 0 ? path.resolve(cwd, args[globalC + 1] ?? ".") : cwd;
+  const dirArg = globalC >= 0 ? path.resolve(here, args[globalC + 1] ?? ".") : here;
 
   // Once core.hooksPath is set, it stays: unsetting it or pointing it elsewhere skips the project's hooks.
   // Reading it is fine, and so is setting it the first time (installing husky, for example).
@@ -264,14 +289,18 @@ function checkGit(args) {
   if (["rm", "mv", "checkout", "restore"].includes(sub) && !toHead) checkPaths(rest, dirArg);
 }
 
+const NULL_DEVICE = /^(\/dev\/null|\$null|nul)$/i;
 const WRITERS = /^(rm|del|erase|rmdir|mv|move|cp|copy|tee|sed|truncate|remove-item|move-item|copy-item|set-content|add-content|out-file|clear-content|new-item)$/i;
 const REMOVERS = /^(rm|del|erase|rmdir|rd|mv|move|remove-item|move-item|ri|mi)$/i;
 
+// True after a cd the guard could not follow: relative paths are then in no known folder.
+let lostDir = false;
 function checkPaths(tokens, dir, removes = false) {
   const base = toplevel(dir) ?? root;
   for (const t of tokens) {
-    const p = t.replace(/^[<>]+/, "").replace(/^(-\w+:)/, "");
-    if (!p || p.startsWith("-")) continue;
+    let p = t.replace(/^[<>]+/, "").replace(/^(-\w+:)/, "");
+    if (lostDir && p && !p.startsWith("-") && !p.includes("$") && !path.isAbsolute(p) && !NULL_DEVICE.test(p)) p = `$CWD/${p}`;
+    if (!p || p.startsWith("-") || NULL_DEVICE.test(p)) continue;
     if (p.includes("$")) { unresolvedPath(p, dir, base, removes); continue; }
     const rel = relTo(base, path.resolve(dir, p));
     if (locked.has(rel)) block(`${rel} is a locked acceptance test. It cannot be changed, moved or deleted.`);
@@ -283,20 +312,32 @@ function checkPaths(tokens, dir, removes = false) {
   }
 }
 
+// Any .. on the command line, in a loop list too (for f in ../x), can carry a variable's path anywhere.
+const LINE_CLIMBS = () => /(^|[\s\\/'"=])\.\.([\\/\s'";]|$)/.test(String(input.tool_input?.command ?? ""));
 // A path with a variable the guard cannot resolve ($f in a loop, $(...)): any value could stand there.
 // When the pattern can name a guarded file, the human confirms.
 function unresolvedPath(p, dir, base, removes) {
   const at = p.indexOf("$");
   const prefix = p.slice(0, at);
-  let relPrefix = prefix ? relTo(base, path.resolve(dir, prefix)) : null;
-  if (relPrefix !== null && /[\\/]$/.test(prefix) && relPrefix) relPrefix += "/";
-  if (relPrefix === ".." || relPrefix?.startsWith("../")) return;
-  const esc = (t) => t.replace(/[.*+?^{}()|[\]\\]/g, "\\$&");
-  const rest = esc(key(p.slice(at)).replace(/\$(\{[^}]*\}|\(.*?\)|[a-z_]\w*|\d|\S)?/gi, "\x02")).replace(/\x02/g, ".*");
-  const re = new RegExp(`^${relPrefix === null ? "(?:.*/)?" : esc(relPrefix)}${rest}${removes ? "(/.*)?" : ""}$`, FOLD ? "i" : "");
+  const tail = p.slice(at);
+  const climbs = /(^|[\\/])\.\.([\\/]|$)/.test(tail) || LINE_CLIMBS();
+  // The fixed folder before the variable: `tests/a$X.js` sits in tests/, `$D/a` in no known folder.
+  const fixedDir = /[\\/]/.test(prefix) ? prefix.replace(/[^\\/]*$/, "") : "";
+  const relDir = fixedDir ? relTo(base, path.resolve(dir, fixedDir)) : null;
+  if (!climbs && (relDir === ".." || relDir?.startsWith("../"))) return;
+  const relPrefix = prefix ? relTo(base, path.resolve(dir, prefix)) + (/[\\/]$/.test(prefix) ? "/" : "") : null;
+  if (isRole("builder") && storiesRel && relPrefix?.startsWith(storiesRel) && !climbs) block("the builder does not edit story files. Report the criterion status; the orchestrator updates the markers.");
   const guarded = [...locked, mapRel, ...(inSubagent ? [LOCK_REL, BREAKER_REL] : [])].filter(Boolean);
-  if (isRole("builder") && storiesRel && relPrefix?.startsWith(storiesRel)) block("the builder does not edit story files. Report the criterion status; the orchestrator updates the markers.");
-  const hit = guarded.find((g) => re.test(g)) ?? (isRole("builder") && storiesRel && (relPrefix === null || storiesRel.startsWith(relPrefix)) ? storiesRel : null);
+  let hit;
+  if (climbs) hit = guarded.length || (isRole("builder") && storiesRel) ? "any file" : null;
+  else {
+    const esc = (t) => t.replace(/[.*+?^{}()|[\]\\]/g, "\\$&");
+    const rest = esc(key(tail).replace(/\$(\{[^}]*\}|\(.*?\)|[a-z_]\w*|\d|\S)?/gi, "\x02"))
+      .replace(/^\x02\//, "(?:.*/)?").replace(/\x02/g, ".*");
+    const lead = relPrefix === null ? "(?:.*/)?" : relPrefix.startsWith("..") ? "" : esc(relPrefix);
+    const re = new RegExp(`^${lead}${rest}${removes ? "(/.*)?" : ""}$`, FOLD ? "i" : "");
+    hit = guarded.find((g) => re.test(g)) ?? (isRole("builder") && storiesRel && (relPrefix === null || storiesRel.startsWith(relPrefix)) ? storiesRel : null);
+  }
   if (hit) confirm(`\`${p}\` holds a shell variable the guard cannot resolve, and it could name ${hit}, which no agent changes. Confirm it does not, or write the full path.`);
 }
 
@@ -355,18 +396,51 @@ if (input.hook_event_name === "PreToolUse" && ["Bash", "PowerShell"].includes(in
     const failed = readBreaker().failures?.[runId]?.[cmd];
     if (failed?.times >= maxSameFailure) block(`\`${cmd.slice(0, 200)}\` failed ${failed.times} times in a row with the same output. Do not run it again: stop and report BLOCKED with that output and what you tried.`);
   }
-  const cmds = commands(String(input.tool_input?.command ?? "").replace(/\d*>&\d/g, " "));
+  const data = splitDataHeredocs(String(input.tool_input?.command ?? ""));
+  // The body of a text heredoc is not checked at all: the Write tool writes the same file unread.
+  const cmds = commands(data.rest.replace(/\d*>&\d/g, " "));
   // Shell variables: `S=/tmp/x; ... > $S/log` writes to /tmp/x/log, not to a repo file named $S/log.
   // A command sees the assignments made before it on this line (`S=...` alone, or `export S=...`), then
-  // the environment; ~ is the home folder. What stays unresolved goes to unresolvedPath.
+  // the environment; ~ is the home folder and $PWD the folder the command runs in. What stays unresolved
+  // goes to unresolvedPath. A name whose value is null is unresolved: it came from $(...), a backtick, or
+  // an assignment the guard cannot place (a subshell, a pipeline), so neither the line nor the environment decides.
   const vars = {};
-  const expand = (t) => t.replace(/^~(?=[\\/]|$)/, os.homedir())
-    .replace(/\$(?:env:)?(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))/g, (m, a, b) => vars[a ?? b] ?? process.env[a ?? b] ?? m)
+  const shellState = (name) => name === "PWD" ? (lostDir ? undefined : here) : name === "OLDPWD" ? undefined : process.env[name];
+  const lookup = (name) => name in vars ? vars[name] ?? undefined : shellState(name);
+  // ~ is HOME: the line's own when it sets one (unresolved if the guard cannot tell its value).
+  const expand = (t) => t.replace(/^~(?=[\\/]|$)/, () => "HOME" in vars ? vars.HOME ?? "$HOME" : os.homedir())
+    .replace(/\$(?:env:)?(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))/g, (m, a, b) => lookup(a ?? b) ?? m)
     .replace(/\x01/g, "$");
   const ASSIGN = /^(?:\$env:)?([A-Za-z_]\w*)=(.*)$/s;
+  const line = String(input.tool_input?.command ?? "");
+  // A name assigned inside $(...), a backtick, a subshell or a pipeline segment: the shell drops that value
+  // when the segment ends, so the guard cannot tell which value a later command sees.
+  const scoped = new Set();
+  for (const m of line.matchAll(/(?:\$\(|`|\(|(?<!\|)\|(?!\|))\s*(?:export\s+|local\s+)?([A-Za-z_]\w*)=/g)) scoped.add(m[1]);
+  for (const m of line.matchAll(/(?:^|[;&\n]|&&)\s*(?:export\s+)?([A-Za-z_]\w*)=[^;&|\n]*(?<!\|)\|(?!\|)/g)) scoped.add(m[1]);
+  // Names the shell sets in ways the guard does not follow: loop variables, read, +=, printf -v.
+  for (const m of line.matchAll(/\b(?:for|select)\s+([A-Za-z_]\w*)\s+in\b|([A-Za-z_]\w*)\+=|\bprintf\s+-v\s+([A-Za-z_]\w*)/g)) scoped.add(m[1] ?? m[2] ?? m[3]);
+  for (const m of line.matchAll(/\bread\b((?:\s+-\w+(?:\s+\S+)?)*)((?:\s+[A-Za-z_]\w*)+)/g)) for (const n of m[2].trim().split(/\s+/)) scoped.add(n);
+  for (const n of scoped) vars[n] = null;
+  // Assignments are read from the bare tokens: `D="x"` arrives as `D=` and a quote placeholder, and
+  // `F=$(cmd)` as a lone `F=`, because commands() splits at $( and backticks.
   const learn = (raw) => {
-    const list = /^(export|declare|typeset|local|readonly)$/.test(raw[0]) ? raw.slice(1) : raw.every((t) => ASSIGN.test(t)) ? raw : [];
-    for (const t of list) { const m = ASSIGN.exec(t); if (m) vars[m[1]] = expand(m[2]); }
+    let bare = [...(raw.bare ?? raw)];
+    while (/^(do|then|else|elif|if|while|until|\{|!)$/.test(bare[0] ?? "")) bare = bare.slice(1);
+    const joined = [];
+    for (let i = 0; i < bare.length; i++) {
+      if (/=$/.test(bare[i]) && /^__Q\d+__$/.test(bare[i + 1] ?? "")) { joined.push(bare[i] + bare[i + 1]); i++; } else joined.push(bare[i]);
+    }
+    const list = /^(export|declare|typeset|local|readonly)$/.test(joined[0] ?? "") ? joined.slice(1) : joined.length && joined.every((t) => ASSIGN.test(t)) ? joined : [];
+    list.forEach((t, i) => {
+      const m = ASSIGN.exec(t);
+      if (!m) return;
+      const value = raw.restore ? raw.restore(m[2]) : m[2];
+      // Never trust an empty value (what is left of F=$(...)), a $(...) or backtick, a value with a quote
+      // inside it (D=a/"b"), or one split from its next piece (export D="a"/b arrives as two tokens).
+      const split = (/__Q\d+__/.test(m[2]) && !/^__Q\d+__$/.test(m[2])) || (i + 1 < list.length && !ASSIGN.test(list[i + 1]));
+      vars[m[1]] = scoped.has(m[1]) || value === "" || /\$\(|`/.test(value) || split ? null : expand(value);
+    });
   };
   // The branch check reads HEAD before the command runs, so a switch and a commit must not share a command.
   // Compare subcommands only: a commit message that mentions «switch» is not a branch change.
@@ -374,21 +448,31 @@ if (input.hook_event_name === "PreToolUse" && ["Bash", "PowerShell"].includes(in
   if (gitSubs.some((c) => c === "switch" || c === "checkout") && gitSubs.includes("commit")) {
     block("run the branch switch and the commit as separate commands.");
   }
+  // The folder of each group: the line itself (0), and each script handed to a shell, which starts where its
+  // parent group was and keeps its own cd to itself.
+  const dirs = new Map([[0, { here: cwd, lost: false }]]);
   for (const raw of cmds) {
+    const g = raw.group ?? 0;
+    if (!dirs.has(g)) dirs.set(g, { ...(dirs.get(raw.parent ?? 0) ?? dirs.get(0)) });
+    const dirState = dirs.get(g);
+    ({ here, lost: lostDir } = dirState);
     learn(raw);
-    // Strip wrappers and VAR=value prefixes: `HUSKY=0 git commit` is still a git commit.
+    // Strip wrappers, shell keywords and VAR=value prefixes: `HUSKY=0 git commit` is still a git commit,
+    // and so is the body of a loop (`do rm $f`).
     let s = 0;
-    while (s < raw.length && (/^(rtk|sudo|command|exec|env|nohup|time|&)$/i.test(raw[s]) || /^\$?(env:)?[A-Za-z_]\w*=/.test(raw[s]))) {
+    while (s < raw.length && (/^(do|then|else|elif|if|while|until|\{|!)$/.test(raw[s]) || /^(rtk|sudo|command|exec|env|nohup|time|&)$/i.test(raw[s]) || /^\$?(env:)?[A-Za-z_]\w*=/.test(raw[s]))) {
       if (/^\$?(env:)?HUSKY=0/i.test(raw[s])) block("HUSKY=0 skips the commit hooks. Fix the failing hook instead.");
       s++;
     }
     const tokens = raw.slice(s);
     if (!tokens.length) continue;
+    // The arguments with their variables filled in; the program name stays as written.
+    const args = tokens.slice(1).map(expand);
     // A script run inline (node -e, python -c, a heredoc) can call git in shapes the checks here cannot read:
     // execFileSync('git', [...]), a cd before it, a quote the parser pairs wrongly. When it both mentions git
     // and starts a program, ask. A script that only edits text mentioning git (the common case) passes.
     if (INTERPRETERS.test(tokens[0])) {
-      const script = tokens.some((t) => t.includes("<<")) ? interpreterHeredocs(String(input.tool_input?.command ?? "")) : tokens.slice(1).join(" ").replace(/\x01/g, "$");
+      const script = tokens.some((t) => t.includes("<<")) ? interpreterHeredocs(line) : tokens.slice(1).join(" ").replace(/\x01/g, "$");
       if (MENTIONS_GIT.test(script) && SPAWNS.test(script)) confirm(`this ${tokens[0]} script mentions git, and git calls inside a script are not checked. Confirm it does not commit, push or rewrite history.`);
     }
     // Windows PowerShell 5 expands $1 and eats quotes inside an inline script (it deleted a story's
@@ -399,9 +483,19 @@ if (input.hook_event_name === "PreToolUse" && ["Bash", "PowerShell"].includes(in
       const encValue = enc < 0 ? "" : tokens[enc].includes(":") ? tokens[enc].split(":")[1] : tokens[enc + 1] ?? "";
       if (/^(set-content|add-content|out-file|sc|ac)$/i.test(tokens[0]) && /^utf-?8(bom)?$/i.test(encValue)) block(`${tokens[0]} -Encoding utf8 writes a byte-order mark in Windows PowerShell. Write the file with Edit/Write instead.`);
     }
+    // Later relative paths on the line resolve from the folder a cd moved to.
+    // A cd in a subshell, a pipeline or the background, cd -, popd and a folder the guard cannot resolve:
+    // the folder after it is unknown.
+    if (/^(cd|chdir|pushd|popd|set-location|sl|push-location|pop-location)$/i.test(tokens[0])) {
+      const to = args.find((t) => !t.startsWith("-") || t === "-");
+      const native = WIN && to ? to.replace(/^\/([a-z])(\/|$)/i, "$1:/") : to;
+      if (raw.sub || /^(popd|pop-location)$/i.test(tokens[0]) || native === "-" || (native && /[$~%]/.test(native))) dirState.lost = true;
+      else dirState.here = native ? path.resolve(here, native) : os.homedir();
+      continue;
+    }
     if (isGit(tokens[0])) {
       if (readOnlyRole && !/^(status|diff|log|show|blame|grep|ls-files|rev-parse|branch|remote)$/i.test(gitSubcommand(tokens))) block(`${agentType} is read-only. It may only run git commands that read.`);
-      checkGit(tokens.slice(1).map(expand));
+      checkGit(args);
       continue;
     }
     if (/^gh$/i.test(tokens[0]) && /^pr$/i.test(tokens[1] ?? "") && /^merge$/i.test(tokens[2] ?? "")) {
@@ -411,14 +505,14 @@ if (input.hook_event_name === "PreToolUse" && ["Bash", "PowerShell"].includes(in
     // Redirections write too: split "x>file" and "> file" into their own tokens.
     const split = (raw.bare?.slice(s) ?? tokens).flatMap((t) => t.split(/(>>?)/)).filter(Boolean);
     const redirTargets = split.filter((t, i) => i > 0 && /^>>?$/.test(split[i - 1])).map((t) => expand(raw.restore?.(t) ?? t));
-    const args = tokens.slice(1).map(expand);
-    if (WRITERS.test(tokens[0])) checkPaths(args, cwd);
-    if (REMOVERS.test(tokens[0])) checkPaths(/^(mv|move|move-item|mi)$/i.test(tokens[0]) ? args.slice(0, -1) : args, cwd, true);
-    if (redirTargets.length) checkPaths(redirTargets, cwd);
+    if (WRITERS.test(tokens[0])) checkPaths(args, here);
+    if (REMOVERS.test(tokens[0])) checkPaths(/^(mv|move|move-item|mi)$/i.test(tokens[0]) ? args.slice(0, -1) : args, here, true);
+    if (redirTargets.length) checkPaths(redirTargets, here);
     if (readOnlyRole) {
       const targets = [...(WRITERS.test(tokens[0]) ? args.filter((t) => !t.startsWith("-")) : []), ...redirTargets]
-        .filter((t) => !/^&?\d*$/.test(t) && !/^\/dev\/null$|^\$null$|^nul$/i.test(t));
-      const outside = targets.find((t) => t.includes("$") || readOnlyBlocks(path.resolve(cwd, t)));
+        .filter((t) => !/^&?\d*$/.test(t) && !NULL_DEVICE.test(t));
+      // A variable left unresolved could hold ../ and climb out of the temp folder; after a lost cd, so could a relative path.
+      const outside = targets.find((t) => t.includes("$") || (lostDir && !path.isAbsolute(t)) || readOnlyBlocks(path.resolve(here, t)));
       if (outside) block(`${agentType} is read-only. It writes only its report under .orchestrator/work/, and scratch files in the temp folder (not ${outside}${outside.includes("$") ? ": write the full path, not a variable the guard cannot resolve" : ""}).`);
     }
   }

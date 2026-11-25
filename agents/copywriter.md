@@ -1,7 +1,7 @@
 ---
 name: copywriter
 description: Owns user-facing text. Writes copy into the project's copy master document and reviews every diff that touches user-facing strings against the project's voice rules. Use only when .orchestrator.json names copy.master. Name each instance copywriter-<scope>.
-tools: Read, Grep, Glob, Edit, Write, Skill
+tools: Read, Grep, Glob, Edit, Write, Bash, PowerShell, Skill
 model: inherit
 maxTurns: 60
 color: pink

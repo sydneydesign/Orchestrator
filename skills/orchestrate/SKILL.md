@@ -81,8 +81,14 @@ Done when: <the check that proves it, with the exact command>
 Budget: write your report before about <N> tool calls, even if work remains
 Write your full output to: <absolute path>/.orchestrator/work/<scope>/<role>.md
 Escalate instead of guessing when: <the open points you can foresee>
+Server: <the URL of the dev server you started, or "none">. Never start a server or service yourself.
+Scratch files (logs, probes, measuring pages) go in your scratchpad, never as new files in the repository.
+Edit files with Edit or Write, never with sed -i.
 Leave nothing running: stop every process you started before you report.
+Search with grep, rg or find through Bash (Select-String, Get-ChildItem in PowerShell) when Grep and Glob are not among your tools.
 ```
+
+The lines from `Server:` on reach every role, which never reads `references/harness.md`. On 25 November in Easy One, without them: a subagent probed a server nobody had started, a design-system agent wrote a measuring page into the repository, and BSD `sed -i` failed three times on macOS. Some Claude Code versions have no Grep or Glob tool: a designer called Grep twice and got «No such tool available» (Easy One, 2026-11-25). The roles still list them for the versions that have them.
 
 Pass the story file path, never a paraphrase. A paraphrase changes the criteria the agent works from.
 

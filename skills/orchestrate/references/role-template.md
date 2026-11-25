@@ -1,7 +1,7 @@
 ---
 name: <role>
 description: "<What it does, in one sentence. When the orchestrator uses it. Name each instance <role>-<scope>.>"
-tools: <Read, Write, Grep, Glob for read-only roles (Write is for the report only); add Edit only for roles that own a deliverable; add Bash/PowerShell only if it must run commands>
+tools: <Read, Write, Grep, Glob, Bash, PowerShell for read-only roles (Write is for the report only; Bash searches where Grep and Glob are missing); add Edit only for roles that own a deliverable>
 model: <inherit for judgement-heavy roles, sonnet for reading-heavy roles>
 maxTurns: <60 is a sound default>
 ---

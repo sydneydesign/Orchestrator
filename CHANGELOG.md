@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.11.0 — 2026-11-25
+
+Builders can run in their own Orca terminal, so the human watches them work. Orca is only the place a builder runs: the plugin launches it with its role, and the guard holds it as it holds a subagent.
+
+- `scripts/launch.mjs` creates the Orca worktree on the story's branch, opens `claude --agent orchestrator:builder` there, stops on any prompt for the human, and hands it the brief with `orca orchestration worker-start --terminal`. Orca wakes the orchestrator when the builder reports. It checks first that Orca still has every command it uses.
+- One fixed rule: an isolated-profile builder runs this way when `.orchestrator.json` → `orca.builders` is `"terminal"` and the orchestrator runs inside Orca. Every other role, and every other case, is a subagent.
+- `references/orca.md` lists the facts the launch relies on, each with its source and whether it was tested. Tested on macOS with Orca 1.4.274; not yet on Windows.
+- Orca's `orchestration` skill stays out of Claude's skills (`harness.md` → Avoid): it launches workers without a role. `orca-cli` is fine.
+
+Guard fixes from Easy One's session of 25 November, where the guard blocked a designer and a design-system agent writing logs and scripts to their scratchpad:
+
+- Shell paths are read with their variables filled in: assignments made earlier on the same command line (`S=...` alone or `export S=...`), then the environment, and `~`. `S=<scratchpad>; npx vite > $S/vite.log` is a write to the scratchpad, not to a repo file named `$S/vite.log`. Single-quoted `$` stays literal, and `git rm`/`git mv` paths are expanded too.
+- A path whose variable stays unresolved (a loop variable, `$(...)`) asks the human when it could name a locked test, the lock list, the generated map or the guard's record, and a builder's write into the stories through one is blocked. A read-only role writes the full path instead.
+- A read-only role may also write in the temp folder (its scratchpad, a log). Everywhere else, other worktrees and the user's settings included, it still writes only its report under `.orchestrator/work/`.
+
 ## 0.10.1 — 2026-11-25
 
 Fixes to `tidy.mjs` from Easy One's review of its port.

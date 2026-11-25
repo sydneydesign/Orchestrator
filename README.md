@@ -169,6 +169,7 @@ A bug is never a new story: it is a failing marker on the criterion it breaks. A
 | `copy` | The copy master document and voice rules. Enables the `copywriter` role. |
 | `design` | The design source. Enables the `designer` role. |
 | `roles` | Project roles and whether each one may write |
+| `orca.builders` | Optional. `"terminal"` runs each builder of an isolated block in its own Orca terminal, so you can watch it, when the orchestrator runs inside Orca. Everything else stays a subagent. See `skills/orchestrate/references/orca.md`. |
 | `tidy.caches` | Optional. Ignored folders that rebuild themselves and grow (a screenshot cache, for example). The close clears them. |
 | `git` | Protected branches, whether pushes need confirmation, broad `git add`, the code owner |
 
@@ -216,7 +217,7 @@ These are a starting set. The orchestrator creates a project role when a job nee
 
 | Path | Contents |
 |---|---|
-| `skills/orchestrate/` | The orchestrator's operating procedure, with references for the harness, git and roles, and `scripts/tidy.mjs` for the close |
+| `skills/orchestrate/` | The orchestrator's operating procedure, with references for the harness, git and roles, `scripts/tidy.mjs` for the close, and `scripts/launch.mjs` to run a builder in an Orca terminal |
 | `skills/stories/` | How to write, split and maintain stories, with templates |
 | `skills/install/` | The project setup, and the assets it copies |
 | `agents/` | The shipped role contracts |
@@ -226,6 +227,8 @@ These are a starting set. The orchestrator creates a project role when a job nee
 ## Upgrading
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the changes in each version. After an update, restart the CLI.
+
+**From 0.10.x to 0.11.0.** Nothing to change. To watch builders work in Orca, add `"orca": { "builders": "terminal" }` to `.orchestrator.json` and run the orchestrator inside Orca. Keep Orca's `orchestration` skill out of `~/.claude/skills`; `orca-cli` is fine.
 
 **From 0.10.0 to 0.10.1.** Nothing to change. A project with its own copy of `tidy.mjs` copies it again: 0.10.0 could delete a fresh branch and miss some citations.
 

@@ -23,6 +23,8 @@ Pick a profile for each block of work. The work decides. Write the profile and i
 | **Live** | The human watches the result on localhost as it lands, or the block's stories share files | One subagent at a time, in the main checkout, on the block's branch | Subagents, in parallel |
 | **Isolated** | Stories with disjoint files and parallel writers | A subagent each, with `isolation: worktree`, on its story's branch | Subagents, in your checkout |
 
+In the isolated profile, a builder runs in its own Orca terminal instead when the project opts in with `orca.builders: "terminal"` and your session runs inside Orca (`references/orca.md`). Everything else stays a subagent.
+
 When in doubt, choose live. A new worktree starts without dependencies, ignored files (`.env`, build output) or a dev server, and the human cannot see the work on localhost before the merge. In gg-ez (2026-11-18) a block of coupled UI stories ran faster live than isolated.
 
 ## Placement
@@ -60,7 +62,7 @@ None of these needs a rule in any text. When a lesson's failure is on this list,
   - `reset --hard`, `clean -f`, and `checkout .` / `restore .`;
   - writes, moves or deletes on locked tests, the locked-tests list, the generated map and the guard's own record;
   - a builder editing stories;
-  - read-only roles writing outside `.orchestrator/work/` or running git commands that write;
+  - read-only roles writing anywhere but `.orchestrator/work/` and the temp folder (their scratchpad), or running git commands that write;
   - role agents loading the `orchestrate` skill or merging pull requests;
   - a role committing, merging, rebasing or cherry-picking on a detached HEAD (a stopped rebase may finish);
   - the same failing command after `verify.maxSameFailure` runs;
@@ -70,11 +72,14 @@ None of these needs a rule in any text. When a lesson's failure is on this list,
   - every push and pull-request merge when `git.allowPush` is `false`;
   - an inline script (`node -e`, `python -c`, a heredoc) that mentions git and starts a program.
 
+  Shell paths are read with their variables filled in from earlier assignments on the same command line and from the environment, and `~` as the home folder. A path whose variable stays unresolved asks the human when it could name a guarded file.
+
   It runs `verify.onBuilderStop` when a builder stops, and refuses the stop while locked files differ from their commit. It refuses the stop of a writing role on a detached HEAD.
 - **`stories.mjs --check`** fails on a stale map and on a context document that names a missing path or script.
 
 ## Avoid
 
+- Orca's `orchestration` skill in Claude's skills (`~/.claude/skills`). It launches workers in Orca terminals, a second way to delegate that clashes with this one (retired in 0.9.0). The plugin alone decides roles, briefs and safety; Orca is at most the place a role runs, started by the plugin's own steps. The `orca-cli` skill is fine: it only operates Orca.
 - Experimental agent teams as the backbone: their plan approvals bypass the human, and teammates do not survive a resume.
 - Two writers on the same files. A finding or a correction on files a writer still holds goes to that writer as an extra item (skill §6.7).
 - Starting services (Docker, a database, a dev server) from a builder's shell. Start shared services yourself.

@@ -7,7 +7,8 @@
 
 import { execFileSync, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -119,13 +120,25 @@ if (input.hook_event_name === "PreToolUse" && input.tool_name === "Skill" && inS
 
 // ---------- PreToolUse: file edits
 
+// A read-only role writes only its report under .orchestrator/work/, and scratch files in the temp folder
+// (its scratchpad, a log). Anything else, another worktree or the user's settings included, is not its to change.
+// Symlinks are resolved first: on macOS /tmp is /private/tmp.
+const realish = (abs) => { let d = abs, rest = ""; while (!existsSync(d) && path.dirname(d) !== d) { rest = path.join(path.basename(d), rest); d = path.dirname(d); } try { return path.join(realpathSync(d), rest); } catch { return abs; } };
+const under = (abs, dir) => { const r = path.relative(dir, abs); return !(r === ".." || r.startsWith(`..${path.sep}`) || path.isAbsolute(r)); };
+const TEMP_DIRS = [...new Set([os.tmpdir(), process.env.TMPDIR, process.env.TEMP, process.env.TMP, WIN ? null : "/tmp"].filter(Boolean).map((d) => realish(path.resolve(d))))];
+const readOnlyBlocks = (abs) => {
+  if (key(abs).includes(`/${STATE}/work/`)) return false;
+  const real = realish(abs);
+  return under(real, realish(root)) || !TEMP_DIRS.some((d) => under(real, d));
+};
+
 function checkFileWrite(rel, absolute) {
   if (locked.has(rel)) block(`${rel} is a locked acceptance test. Report the problem instead of changing the test; only the orchestrator unlocks it, on the product owner's request.`);
   if (rel === mapRel) block(`${rel} is generated. Change the stories and run stories.mjs instead.`);
   if (inSubagent && rel === LOCK_REL) block("subagents cannot change the locked-tests list.");
   if (touchesBreaker(rel, false)) block(`${rel} is the guard's own record. No agent changes it.`);
   if (isRole("builder") && storiesRel && rel.startsWith(storiesRel)) block("the builder does not edit story files. Report the criterion status; the orchestrator updates the markers.");
-  if (readOnlyRole && !key(absolute).includes(`/${STATE}/work/`)) block(`${agentType} is read-only. It writes only its report under .orchestrator/work/.`);
+  if (readOnlyRole && readOnlyBlocks(absolute)) block(`${agentType} is read-only. It writes only its report under .orchestrator/work/, and scratch files in the temp folder.`);
 }
 
 if (input.hook_event_name === "PreToolUse" && ["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(input.tool_name)) {
@@ -143,7 +156,8 @@ if (input.hook_event_name === "PreToolUse" && ["Edit", "Write", "MultiEdit", "No
 // of its own when it is itself a git or shell call, or the script a shell runs (bash -c "...").
 function commands(line) {
   const quoted = [];
-  const bare = line.replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g, (_, d, s) => { quoted.push(d ?? s); return ` __Q${quoted.length - 1}__ `; });
+  // The shell leaves $ inside single quotes alone: \x01 marks it so the variable expansion leaves it too.
+  const bare = line.replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g, (_, d, s) => { quoted.push(d ?? s.replace(/\$/g, "\x01")); return ` __Q${quoted.length - 1}__ `; });
   const scripts = new Set([...bare.matchAll(/(?:^|[\s\\/;&|(])(?:bash|sh|zsh|pwsh|powershell|cmd)(?:\.exe)?\s+(?:-\w*c|-command|\/c)\s+__Q(\d+)__/gi)].map((m) => +m[1]));
   const out = [];
   for (const seg of bare.split(/&&|\|\||;|\||&|\n|\$\(|`|\(|\)/)) {
@@ -153,7 +167,7 @@ function commands(line) {
     if (tokens.length) out.push(Object.assign(tokens.map(restore), { bare: tokens, restore }));
   }
   quoted.forEach((q, i) => {
-    if (scripts.has(i) || /^\s*(\S*[\\/])?git(\.exe)?\s/i.test(q) || /^\s*(bash|sh|pwsh|powershell)\b/i.test(q)) out.push(...commands(q));
+    if (scripts.has(i) || /^\s*(\S*[\\/])?git(\.exe)?\s/i.test(q) || /^\s*(bash|sh|pwsh|powershell)\b/i.test(q)) out.push(...commands(q.replace(/\x01/g, "$")));
   });
   return out;
 }
@@ -258,6 +272,7 @@ function checkPaths(tokens, dir, removes = false) {
   for (const t of tokens) {
     const p = t.replace(/^[<>]+/, "").replace(/^(-\w+:)/, "");
     if (!p || p.startsWith("-")) continue;
+    if (p.includes("$")) { unresolvedPath(p, dir, base, removes); continue; }
     const rel = relTo(base, path.resolve(dir, p));
     if (locked.has(rel)) block(`${rel} is a locked acceptance test. It cannot be changed, moved or deleted.`);
     if (removes && !rel.startsWith("..") && holdsLocked(rel)) block(`${rel || "."} holds locked acceptance tests. It cannot be moved or deleted.`);
@@ -266,6 +281,23 @@ function checkPaths(tokens, dir, removes = false) {
     if (isRole("builder") && storiesRel && rel.startsWith(storiesRel)) block("the builder does not edit story files. Report the criterion status; the orchestrator updates the markers.");
     if (rel === mapRel) block(`${rel} is generated. Change the stories and run stories.mjs instead.`);
   }
+}
+
+// A path with a variable the guard cannot resolve ($f in a loop, $(...)): any value could stand there.
+// When the pattern can name a guarded file, the human confirms.
+function unresolvedPath(p, dir, base, removes) {
+  const at = p.indexOf("$");
+  const prefix = p.slice(0, at);
+  let relPrefix = prefix ? relTo(base, path.resolve(dir, prefix)) : null;
+  if (relPrefix !== null && /[\\/]$/.test(prefix) && relPrefix) relPrefix += "/";
+  if (relPrefix === ".." || relPrefix?.startsWith("../")) return;
+  const esc = (t) => t.replace(/[.*+?^{}()|[\]\\]/g, "\\$&");
+  const rest = esc(key(p.slice(at)).replace(/\$(\{[^}]*\}|\(.*?\)|[a-z_]\w*|\d|\S)?/gi, "\x02")).replace(/\x02/g, ".*");
+  const re = new RegExp(`^${relPrefix === null ? "(?:.*/)?" : esc(relPrefix)}${rest}${removes ? "(/.*)?" : ""}$`, FOLD ? "i" : "");
+  const guarded = [...locked, mapRel, ...(inSubagent ? [LOCK_REL, BREAKER_REL] : [])].filter(Boolean);
+  if (isRole("builder") && storiesRel && relPrefix?.startsWith(storiesRel)) block("the builder does not edit story files. Report the criterion status; the orchestrator updates the markers.");
+  const hit = guarded.find((g) => re.test(g)) ?? (isRole("builder") && storiesRel && (relPrefix === null || storiesRel.startsWith(relPrefix)) ? storiesRel : null);
+  if (hit) confirm(`\`${p}\` holds a shell variable the guard cannot resolve, and it could name ${hit}, which no agent changes. Confirm it does not, or write the full path.`);
 }
 
 // ---------- The same failure in a row, inside one builder run
@@ -324,6 +356,18 @@ if (input.hook_event_name === "PreToolUse" && ["Bash", "PowerShell"].includes(in
     if (failed?.times >= maxSameFailure) block(`\`${cmd.slice(0, 200)}\` failed ${failed.times} times in a row with the same output. Do not run it again: stop and report BLOCKED with that output and what you tried.`);
   }
   const cmds = commands(String(input.tool_input?.command ?? "").replace(/\d*>&\d/g, " "));
+  // Shell variables: `S=/tmp/x; ... > $S/log` writes to /tmp/x/log, not to a repo file named $S/log.
+  // A command sees the assignments made before it on this line (`S=...` alone, or `export S=...`), then
+  // the environment; ~ is the home folder. What stays unresolved goes to unresolvedPath.
+  const vars = {};
+  const expand = (t) => t.replace(/^~(?=[\\/]|$)/, os.homedir())
+    .replace(/\$(?:env:)?(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))/g, (m, a, b) => vars[a ?? b] ?? process.env[a ?? b] ?? m)
+    .replace(/\x01/g, "$");
+  const ASSIGN = /^(?:\$env:)?([A-Za-z_]\w*)=(.*)$/s;
+  const learn = (raw) => {
+    const list = /^(export|declare|typeset|local|readonly)$/.test(raw[0]) ? raw.slice(1) : raw.every((t) => ASSIGN.test(t)) ? raw : [];
+    for (const t of list) { const m = ASSIGN.exec(t); if (m) vars[m[1]] = expand(m[2]); }
+  };
   // The branch check reads HEAD before the command runs, so a switch and a commit must not share a command.
   // Compare subcommands only: a commit message that mentions «switch» is not a branch change.
   const gitSubs = cmds.filter((c) => isGit(c[0]) || isGit(c[1] ?? "")).map(gitSubcommand);
@@ -331,6 +375,7 @@ if (input.hook_event_name === "PreToolUse" && ["Bash", "PowerShell"].includes(in
     block("run the branch switch and the commit as separate commands.");
   }
   for (const raw of cmds) {
+    learn(raw);
     // Strip wrappers and VAR=value prefixes: `HUSKY=0 git commit` is still a git commit.
     let s = 0;
     while (s < raw.length && (/^(rtk|sudo|command|exec|env|nohup|time|&)$/i.test(raw[s]) || /^\$?(env:)?[A-Za-z_]\w*=/.test(raw[s]))) {
@@ -343,7 +388,7 @@ if (input.hook_event_name === "PreToolUse" && ["Bash", "PowerShell"].includes(in
     // execFileSync('git', [...]), a cd before it, a quote the parser pairs wrongly. When it both mentions git
     // and starts a program, ask. A script that only edits text mentioning git (the common case) passes.
     if (INTERPRETERS.test(tokens[0])) {
-      const script = tokens.some((t) => t.includes("<<")) ? interpreterHeredocs(String(input.tool_input?.command ?? "")) : tokens.slice(1).join(" ");
+      const script = tokens.some((t) => t.includes("<<")) ? interpreterHeredocs(String(input.tool_input?.command ?? "")) : tokens.slice(1).join(" ").replace(/\x01/g, "$");
       if (MENTIONS_GIT.test(script) && SPAWNS.test(script)) confirm(`this ${tokens[0]} script mentions git, and git calls inside a script are not checked. Confirm it does not commit, push or rewrite history.`);
     }
     // Windows PowerShell 5 expands $1 and eats quotes inside an inline script (it deleted a story's
@@ -356,7 +401,7 @@ if (input.hook_event_name === "PreToolUse" && ["Bash", "PowerShell"].includes(in
     }
     if (isGit(tokens[0])) {
       if (readOnlyRole && !/^(status|diff|log|show|blame|grep|ls-files|rev-parse|branch|remote)$/i.test(gitSubcommand(tokens))) block(`${agentType} is read-only. It may only run git commands that read.`);
-      checkGit(tokens.slice(1));
+      checkGit(tokens.slice(1).map(expand));
       continue;
     }
     if (/^gh$/i.test(tokens[0]) && /^pr$/i.test(tokens[1] ?? "") && /^merge$/i.test(tokens[2] ?? "")) {
@@ -365,15 +410,16 @@ if (input.hook_event_name === "PreToolUse" && ["Bash", "PowerShell"].includes(in
     }
     // Redirections write too: split "x>file" and "> file" into their own tokens.
     const split = (raw.bare?.slice(s) ?? tokens).flatMap((t) => t.split(/(>>?)/)).filter(Boolean);
-    const redirTargets = split.filter((t, i) => i > 0 && /^>>?$/.test(split[i - 1])).map((t) => raw.restore?.(t) ?? t);
-    if (WRITERS.test(tokens[0])) checkPaths(tokens.slice(1), cwd);
-    if (REMOVERS.test(tokens[0])) checkPaths(/^(mv|move|move-item|mi)$/i.test(tokens[0]) ? tokens.slice(1, -1) : tokens.slice(1), cwd, true);
+    const redirTargets = split.filter((t, i) => i > 0 && /^>>?$/.test(split[i - 1])).map((t) => expand(raw.restore?.(t) ?? t));
+    const args = tokens.slice(1).map(expand);
+    if (WRITERS.test(tokens[0])) checkPaths(args, cwd);
+    if (REMOVERS.test(tokens[0])) checkPaths(/^(mv|move|move-item|mi)$/i.test(tokens[0]) ? args.slice(0, -1) : args, cwd, true);
     if (redirTargets.length) checkPaths(redirTargets, cwd);
     if (readOnlyRole) {
-      const targets = [...(WRITERS.test(tokens[0]) ? tokens.slice(1).filter((t) => !t.startsWith("-")) : []), ...redirTargets]
+      const targets = [...(WRITERS.test(tokens[0]) ? args.filter((t) => !t.startsWith("-")) : []), ...redirTargets]
         .filter((t) => !/^&?\d*$/.test(t) && !/^\/dev\/null$|^\$null$|^nul$/i.test(t));
-      const outside = targets.find((t) => !key(path.resolve(cwd, t)).includes(`/${STATE}/work/`));
-      if (outside) block(`${agentType} is read-only. It writes only its report under .orchestrator/work/ (not ${outside}).`);
+      const outside = targets.find((t) => t.includes("$") || readOnlyBlocks(path.resolve(cwd, t)));
+      if (outside) block(`${agentType} is read-only. It writes only its report under .orchestrator/work/, and scratch files in the temp folder (not ${outside}${outside.includes("$") ? ": write the full path, not a variable the guard cannot resolve" : ""}).`);
     }
   }
   if (confirmReason) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse",

@@ -34,7 +34,7 @@ Pick the block's profile first, live or isolated (`references/harness.md`, **Two
 |---|---|---|
 | Trivial or coupled: a merge, a criterion's text, locking tests, a one-file fix | You, directly | Your checkout, or a branch's worktree with `git -C <literal path>` |
 | Writes, live profile: `builder`, a writing `copywriter`, a project role with `readOnly: false` | A subagent | The main checkout, on the block's branch. One writer at a time |
-| Writes, isolated profile | A subagent with `isolation: worktree` | Its own worktree, on its story's branch |
+| Writes, isolated profile | A subagent with `isolation: worktree`. A builder in its own Orca terminal when `orca.builders` is `"terminal"` and you run inside Orca (`references/orca.md`) | Its own worktree, on its story's branch |
 | Judges or reads: `reviewer`, `researcher`, `designer`, a project role with `readOnly: true` | A subagent | Your checkout |
 
 Who does it, first match wins:

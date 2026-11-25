@@ -115,9 +115,11 @@ Talk to the main session in plain language: "build the password reset story", "r
 - comes back to you only for a product call, an irreversible action (push, merge, deploy, delete), what the tests cannot prove, and acceptance;
 - writes to you in product terms: the story's title first, its ID in parentheses, and code tokens kept out of the way.
 
-For visual work you want to iterate on quickly, ask for **exploration**. The orchestrator edits directly on an `explore/<topic>` branch while you watch. When you keep the result, it turns it into stories, tests and one review in a single pass.
+For visual work you want to iterate on quickly, ask for **exploration**. The orchestrator edits directly on an `explore/<topic>` branch while you watch. When you keep the result, it turns it into stories, tests and one review in a single pass, and the options you did not keep leave the code. Screenshots stay in `.orchestrator/work/` and never enter git.
 
-At the end of a block of work the orchestrator runs the full verification, writes lessons from real failures into `CLAUDE.md`, and gives you one batched list: bad news first, decisions it made, and branches waiting to be pushed or merged.
+At the end of a block of work the orchestrator runs the full verification, writes lessons from real failures into `CLAUDE.md`, and cleans up without being asked: it stops its agents, keeps `state.md` to the current state, and runs `tidy.mjs`. Then it gives you one batched list: bad news first, decisions it made, and branches waiting to be pushed or merged.
+
+`tidy.mjs` shows a preview, then deletes the work folders of closed blocks, local branches already merged into the main branch (with their clean worktrees), and the caches you list in `tidy.caches`. It keeps a work folder that a tracked file or `state.md` still names, a branch with no commits of its own, a worktree with uncommitted changes, and any tracked file. If a close was skipped, the next session starts with one line saying what was left behind.
 
 ## Stories
 
@@ -167,6 +169,7 @@ A bug is never a new story: it is a failing marker on the criterion it breaks. A
 | `copy` | The copy master document and voice rules. Enables the `copywriter` role. |
 | `design` | The design source. Enables the `designer` role. |
 | `roles` | Project roles and whether each one may write |
+| `tidy.caches` | Optional. Ignored folders that rebuild themselves and grow (a screenshot cache, for example). The close clears them. |
 | `git` | Protected branches, whether pushes need confirmation, broad `git add`, the code owner |
 
 A project's `CLAUDE.md` can adjust the process. For example, a prototype with demo data can ask for one review per story and tests only for criteria with logic.
@@ -213,7 +216,7 @@ These are a starting set. The orchestrator creates a project role when a job nee
 
 | Path | Contents |
 |---|---|
-| `skills/orchestrate/` | The orchestrator's operating procedure, with references for the harness, git and roles |
+| `skills/orchestrate/` | The orchestrator's operating procedure, with references for the harness, git and roles, and `scripts/tidy.mjs` for the close |
 | `skills/stories/` | How to write, split and maintain stories, with templates |
 | `skills/install/` | The project setup, and the assets it copies |
 | `agents/` | The shipped role contracts |
@@ -223,6 +226,8 @@ These are a starting set. The orchestrator creates a project role when a job nee
 ## Upgrading
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the changes in each version. After an update, restart the CLI.
+
+**From 0.9.x to 0.10.0.** Nothing to change. Optionally add `"tidy": { "caches": [...] }` to `.orchestrator.json` for caches the close should clear. A project that keeps its own copy of the plugin's procedure and guard ports `scripts/tidy.mjs` and the guard's session-start note by hand.
 
 **From 0.8.x to 0.9.0.** Orca support is removed: roles run only as Claude Code subagents. Delete the `orca` key from `.orchestrator.json`, and `.orchestrator/roles/` if it exists.
 

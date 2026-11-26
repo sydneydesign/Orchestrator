@@ -49,6 +49,15 @@ Only one agent drives the browser at a time. Screenshots are the evidence, not t
 
 The guard reads a subagent's role from `agent_type`. `.orchestrator.json` → `roles.<name>.readOnly` decides whether a role writes; the plugin's roles have defaults.
 
+### What the guard is for
+
+The guard catches an agent's honest mistakes. It is not a sandbox against an agent that tries to get around it. The review and the human catch the rest.
+
+- Fix a gap only when an agent hit it in real work. Name the project and the date in the CHANGELOG.
+- Do not add a check for a bypass that only a review or a probe found: obfuscated globs, symlink tricks, quoting games, shells inside interpreters. List it under "Known, unchanged" instead.
+- A new check that needs more than a few lines of shell parsing goes to the human first.
+- Every change still passes `node hooks/check-guard.mjs`. Do not add a case for an accepted gap.
+
 ### Enforced by code
 
 None of these needs a rule in any text. When a lesson's failure is on this list, delete the lesson.

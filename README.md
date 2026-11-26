@@ -204,6 +204,8 @@ It asks the human before each merge into a protected branch, each pull request m
 
 The full list lives in `skills/orchestrate/references/harness.md` under **Enforced by code**. A rule on that list is never repeated in the instructions.
 
+The guard catches honest mistakes. It is not a sandbox against an agent that tries to get around it. A gap gets a fix only after an agent hits it in real work (`harness.md` → **What the guard is for**).
+
 ## Roles
 
 | Role | Writes | Job |
@@ -238,6 +240,8 @@ These are a starting set. The orchestrator creates a project role when a job nee
 ## Upgrading
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the changes in each version. After an update, restart the CLI.
+
+**From 0.13.1 to 0.13.2.** Nothing to change. No code changed: the guard's scope is now written down (`harness.md` → **What the guard is for**).
 
 **From 0.13.0 to 0.13.1.** Nothing to change. A project with its own copy of `worktree.mjs` copies it again, so the guard can tell a worktree that ran its setup.
 

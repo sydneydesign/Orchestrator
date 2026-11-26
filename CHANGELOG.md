@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.2 — 2026-11-26
+
+The guard stops growing against bypasses. Since 0.9.0 it grew from 411 to 906 lines. Between 0.11.2 and 0.13.1 its cases went from 114 to 301. Most of that work closed bypasses that only reviews found (globs, symlinks, `env -S`, quoting), and each fix revealed more.
+
+- `references/harness.md` → **What the guard is for**: the guard catches honest mistakes, not deliberate evasion. A gap gets a fix only after an agent hits it in real work. Bypasses found only in review go under "Known, unchanged".
+- No guard code changed.
+
 ## 0.13.1 — 2026-11-26
 
 Fixes from the Easy One watch of 26 November, each reproduced first, kept to what survived six code reviews.

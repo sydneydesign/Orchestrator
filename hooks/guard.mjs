@@ -156,29 +156,97 @@ if (input.hook_event_name === "PreToolUse" && ["Edit", "Write", "MultiEdit", "No
 
 // Split a command line into simple commands. Quoted text is kept apart: it is checked as a command
 // of its own when it is itself a git or shell call, or the script a shell runs (bash -c "...").
+// A shell or an interpreter anywhere on the line: then any quoted text could end up run.
+const SHELLISH = /(^|[\s\\/;&|()"'])(bash|sh|zsh|dash|ksh|fish|csh|tcsh|busybox|pwsh|powershell|cmd|eval|iex|invoke-expression|source|xargs|ssh|python[0-9.]*|py|node|perl|ruby|deno|bun|php|osascript)(\.exe)?(?![\w.-])/i;
+// Programs whose quoted arguments are text, never run: searches, and gh's pull requests, issues and releases.
+// echo and printf are not on the list: their output is the text itself. A false block beats a bypass.
+// (Easy One, 2026-11-26: `rg "git push --force" docs` and a gh pull-request body were blocked as a force push.)
+const TEXT_ONLY = /^(rg|grep|egrep|fgrep|ugrep|gh|select-string|sls|findstr)(\.exe)?$/i;
+// What can run a search's text later on the same line: $_ (the last argument), a function that takes a
+// search's name, a PATH or hash that points the name at a script, an alias.
+const RERUNS = /\$_|\$\{_\}|\(\s*\)|(^|[\s;&|(])(function|hash|alias|enable)\s|(^|[\s;&|(])PATH\+?=/;
+// Quoted text that is itself a git or shell call.
+const RUNS_TEXT = /^\s*(\S*[\\/])?(git|bash|sh|zsh|dash|ksh|fish|pwsh|powershell)(\.exe)?(?![\w-])/i;
+// What the main loop steps over to find a segment's program.
+// Programs that run the rest of their line, with the options of each that take a separate value:
+// `timeout -k 5 9 git push`, `sudo -u root git push`, `env -u X git push` are still git pushes.
+const WRAPPERS = {
+  rtk: "", command: "", nohup: "", xcrun: " sdk toolchain", arch: "de arch", setsid: "", unbuffer: "", chrt: "", taskset: "",
+  exec: "a", time: "fo", env: "uSCP unset chdir split-string",
+  sudo: "ugpChDrtTUR user group prompt close-from chdir chroot role type other-user host", doas: "uCa",
+  timeout: "sk signal kill-after", gtimeout: "sk signal kill-after", nice: "n adjustment",
+  ionice: "cnp class classdata pid", stdbuf: "ioe input output error", caffeinate: "tw",
+};
+const KEYWORD = /^(do|then|else|elif|if|while|until|\{|!|&)$/;
+const ASSIGN = /^\$?(env:)?[A-Za-z_]\w*=/;
+// The index of a command's program, past shell keywords, VAR=value prefixes and wrappers with their
+// options and numbers. Calls onAssign for each prefix assignment it steps over.
+// bare: the same tokens with quotes as placeholders, when raw has them restored.
+function programIndex(raw, onAssign = () => {}, bare = raw) {
+  let s = 0;
+  while (s < raw.length) {
+    const t = raw[s], name = t.replace(/^.*[\\/]/, "").toLowerCase().replace(/\.exe$/, "");
+    const w = Object.hasOwn(WRAPPERS, name) ? WRAPPERS[name] : undefined;
+    // command -v git only looks the name up.
+    if (name === "command" && /^-[vV]$/.test(raw[s + 1] ?? "")) break;
+    if (KEYWORD.test(t)) { s++; continue; }
+    // X="a b" is one word: its quoted value is the next token here.
+    if (ASSIGN.test(t)) { const q = /=$/.test(t) && /^__Q\d+__$/.test(bare[s + 1] ?? ""); onAssign(q ? t + raw[s + 1] : t); s += q ? 2 : 1; continue; }
+    if (w === undefined) break;
+    const [short = "", ...long] = w.split(" ");
+    s++;
+    while (s < raw.length - 1 && (/^-/.test(raw[s]) || /^\d[\w.,:-]*$/.test(raw[s]))) {
+      const o = raw[s];
+      // -u root and -uroot: a value-taking letter last takes the next word; with letters after it, they are its value.
+      const letters = /^-[a-zA-Z]\w*$/.test(o) ? o.slice(1) : "";
+      const at = [...letters].findIndex((c) => short.includes(c));
+      const value = /^--?[\w-]+$/.test(o) && long.includes(o.replace(/^--?/, "")) ? true
+        : /^--/.test(o) ? false : at >= 0 && at === letters.length - 1;
+      s += value ? 2 : 1;
+    }
+  }
+  return s;
+}
 let groupSeq = 0;
 function commands(line, group = 0) {
-  const quoted = [];
+  const quoted = [], double = new Set();
   // The shell leaves $ inside single quotes alone: \x01 marks it so the variable expansion leaves it too.
-  const bare = line.replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g, (_, d, s) => { quoted.push(d ?? s.replace(/\$/g, "\x01")); return ` __Q${quoted.length - 1}__ `; });
-  const scripts = new Set([...bare.matchAll(/(?:^|[\s\\/;&|(])(?:bash|sh|zsh|pwsh|powershell|cmd)(?:\.exe)?\s+(?:-\w*c|-command|\/c)\s+__Q(\d+)__/gi)].map((m) => +m[1]));
-  const runs = (i) => scripts.has(i) || /^\s*(\S*[\\/])?git(\.exe)?\s/i.test(quoted[i]) || /^\s*(bash|sh|pwsh|powershell)\b/i.test(quoted[i]);
+  const bare = line.replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g, (_, d, s) => { if (d !== undefined) double.add(quoted.length); quoted.push(d ?? s.replace(/\$/g, "\x01")); return ` __Q${quoted.length - 1}__ `; });
+  const scripts = new Set([...bare.matchAll(/(?:^|[\s\\/;&|(])(?:bash|sh|zsh|dash|ksh|fish|csh|tcsh|pwsh|powershell|cmd)(?:\.exe)?(?:\s+(?:[-+]\w*[oO]\s+\S+|--(?:rcfile|init-file)\s+\S+|[-+]{1,2}[\w-]+|\/(?!c\b)[a-z]:?\w*))*?\s+(?:-\w*c|-command|\/c)\s+__Q(\d+)__/gi)].map((m) => +m[1]));
+  // env -S runs its string as env's own arguments: options, VAR=value, then the program.
+  const envS = new Set([...bare.matchAll(/(?:^|[\s;&|(])env(?:\s+-\S+)*?\s+(?:-\w*S|--split-string=?)\s+__Q(\d+)__/g)].map((m) => +m[1]));
+  envS.forEach((i) => scripts.add(i));
+  const shellish = SHELLISH.test(line) || RERUNS.test(line);
+  // Quoted arguments that stay text: the line is one search or gh message, with no prefix, pipe, redirect
+  // or other command, and is not itself a script another command runs.
+  const text = new Set();
+  const runs = (i) => scripts.has(i) || (!text.has(i) && RUNS_TEXT.test(quoted[i]));
   const out = [];
   // .sub: the segment runs in a subshell, $(...), a backtick, a pipeline or the background, so a cd there
   // does not move the commands after it.
-  const parts = bare.split(/(&&|\|\||;|\||&|\n|\$\(|`|\(|\))/);
+  const parts = bare.split(/(&&|\|\||;|\||&|\n|\$\(|\x60|\(|\))/);
   let depth = 0, tick = false;
   for (let k = 0; k < parts.length; k += 2) {
     const before = parts[k - 1] ?? "", after = parts[k + 1] ?? "";
     if (before === "(" || before === "$(") depth++;
-    if (before === "`") tick = !tick;
+    if (before === "\x60") tick = !tick;
     const tokens = parts[k].trim().split(/\s+/).filter(Boolean);
+    const p = programIndex(tokens);
+    const program = tokens[p] ?? "";
+    // A bare name only: ./rg or bin/grep could be any script.
+    // The whole line is this one command, outside any script: nothing else can take its output.
+    // A newline or an escaped quote can hide a command inside what looks like one quoted string.
+    const textOnly = group === 0 && parts.length === 1 && !/\n|\\["']/.test(line) && !shellish && TEXT_ONLY.test(program) && p === 0
+      && !tokens.some((t) => t.includes(">") && !/^2>>?(\/dev\/null|\$null|nul)$/i.test(t) && t !== "2>&1")
+      && (!/^gh(\.exe)?$/i.test(program) || /^(pr|issue|release)$/.test(tokens[p + 1] ?? ""));
+    // Double quotes still run their $(...) and backticks.
+    if (textOnly) for (const t of tokens) for (const m of t.matchAll(/__Q(\d+)__/g)) if (!(double.has(+m[1]) && /\$\(|\x60/.test(quoted[+m[1]]))) text.add(+m[1]);
     // .bare keeps the quotes out: a > inside a quoted argument is text, not a redirection.
     const restore = (t) => t.replace(/__Q(\d+)__/g, (_, i) => quoted[i]);
     const sub = depth > 0 || tick || [before, after].some((d) => d === "|" || d === "&");
     if (tokens.length) out.push(Object.assign(tokens.map(restore), { bare: tokens, restore, sub, group }));
     // A script handed to a shell or to git is checked where it runs, as its own group.
-    for (const m of parts[k].matchAll(/__Q(\d+)__/g)) if (runs(+m[1])) out.push(...commands(quoted[+m[1]].replace(/\x01/g, "$"), ++groupSeq).map((c) => Object.assign(c, { parent: c.parent ?? group })));
+    for (const m of parts[k].matchAll(/__Q(\d+)__/g)) if (runs(+m[1])) out.push(...commands((envS.has(+m[1]) ? "env " : "") + quoted[+m[1]].replace(/\x01/g, "$"), ++groupSeq).map((c) => Object.assign(c, { parent: c.parent ?? group })));
     if (after === ")" && depth > 0) depth--;
   }
   return out;
@@ -355,7 +423,7 @@ const runId = String(input.agent_id ?? (inSubagent ? input.session_id ?? "" : ""
 const isProbe = (c) => {
   let t = commands(c).at(-1) ?? [];
   if (/^rtk$/i.test(t[0] ?? "") && /^(test|err|summary|proxy)$/i.test(t[1] ?? "")) t = t.slice(2);
-  t = t.filter((x) => !/^(rtk|sudo|command|env|time)$/i.test(x) && !/^\$?(env:)?[A-Za-z_]\w*=/.test(x));
+  t = t.slice(programIndex(t));
   return /^(grep|egrep|fgrep|rg|findstr|select-string|sls|test|\[|\[\[|diff|cmp|fc)$/i.test(t[0] ?? "")
     || (isGit(t[0] ?? "") && /^(diff|grep|rev-parse|ls-files|show-ref|merge-base|cat-file|check-ignore|config)$/i.test(gitSubcommand(t)));
 };
@@ -399,6 +467,8 @@ if (input.hook_event_name === "PreToolUse" && ["Bash", "PowerShell"].includes(in
   const data = splitDataHeredocs(String(input.tool_input?.command ?? ""));
   // The body of a text heredoc is not checked at all: the Write tool writes the same file unread.
   const cmds = commands(data.rest.replace(/\d*>&\d/g, " "));
+  // HUSKY=0 set for the commands after it: export, declare -x, or PowerShell's $env:.
+  if (/(^|[\s;&|(])(export\s+|declare\s+-\w*x\w*\s+|set\s+|\$env:)HUSKY\s*=\s*["']?0\b/i.test(data.rest)) block("HUSKY=0 skips the commit hooks. Fix the failing hook instead.");
   // Shell variables: `S=/tmp/x; ... > $S/log` writes to /tmp/x/log, not to a repo file named $S/log.
   // A command sees the assignments made before it on this line (`S=...` alone, or `export S=...`), then
   // the environment; ~ is the home folder and $PWD the folder the command runs in. What stays unresolved
@@ -459,11 +529,7 @@ if (input.hook_event_name === "PreToolUse" && ["Bash", "PowerShell"].includes(in
     learn(raw);
     // Strip wrappers, shell keywords and VAR=value prefixes: `HUSKY=0 git commit` is still a git commit,
     // and so is the body of a loop (`do rm $f`).
-    let s = 0;
-    while (s < raw.length && (/^(do|then|else|elif|if|while|until|\{|!)$/.test(raw[s]) || /^(rtk|sudo|command|exec|env|nohup|time|&)$/i.test(raw[s]) || /^\$?(env:)?[A-Za-z_]\w*=/.test(raw[s]))) {
-      if (/^\$?(env:)?HUSKY=0/i.test(raw[s])) block("HUSKY=0 skips the commit hooks. Fix the failing hook instead.");
-      s++;
-    }
+    const s = programIndex(raw, (t) => { if (/^\$?(env:)?HUSKY=["']?0/i.test(t)) block("HUSKY=0 skips the commit hooks. Fix the failing hook instead."); }, raw.bare);
     const tokens = raw.slice(s);
     if (!tokens.length) continue;
     // The arguments with their variables filled in; the program name stays as written.

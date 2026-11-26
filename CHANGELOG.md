@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.11.2 — 2026-11-26
+
+A search no longer trips the guard. From Easy One's guard (a1436fd), reproduced here first, then narrowed over five code reviews: each wider version let a force push through.
+
+- A line that is one search, `rg`, `grep`, `egrep`, `fgrep`, `ugrep`, `Select-String` or `findstr`, or one `gh pr`, `gh issue` or `gh release` command, may quote git or shell text: it is text, not a command. `rg "git push --force" docs` and a pull-request body that mentions a force push were blocked as a force push. `2>/dev/null` and `2>&1` are fine. Quoted text with a `$(...)` or backtick inside double quotes, a newline or an escaped quote on the line loses the exemption: it is checked as before 0.11.2.
+- Anything more on the line and the quoted text is checked as before: another command, a pipe, a redirect, a group, a loop, a prefix such as `env` or `timeout`, `./rg` instead of `rg`, or the line being a script `bash -c` runs. Search in a line of its own.
+- Windows: the same holds in PowerShell for `Select-String`, `sls`, `findstr` and `rg.exe`, with `2>$null` or `2>NUL`. A path such as `C:\tools\rg.exe` or `.\rg` is checked: it could be any program.
+- `echo`, `printf` and `gh alias` stay checked: their output or alias can be run.
+- Wrappers are read with their options: git behind `timeout`, `nice`, `ionice`, `stdbuf`, `caffeinate`, `chrt`, `taskset`, `setsid`, `unbuffer`, `doas`, `sudo -u root`, `sudo --user root`, `sudo -uroot`, `env -i`, `env -P`, `exec -a`, `time -p`, `command -p`, `xcrun --sdk x` or `arch -arch arm64`, alone, chained or written as a path (`/usr/bin/env`), passed unseen. So did a quoted prefix (`X="a b" git push`). `command -v git` only looks git up, so a read-only role may run it. `HUSKY=0` behind one is blocked too.
+- `bash -c` and the other shells' scripts are checked with options before `-c` (`bash -o pipefail -c`, `bash -euo pipefail -c`, `+o posix`, `--rcfile f`, `pwsh -NoProfile -Command`, `cmd /d /s /c`), and for `dash`, `ksh`, `fish`, `csh` and `tcsh` too. Quoted text starting with `bash.exe` or `/bin/bash` is read as a shell call.
+- The string `env -S` runs is checked as a command line: `env -S 'HUSKY=0 git commit'` passed. `export HUSKY=0`, `declare -x HUSKY=0` and PowerShell's `$env:HUSKY="0"` are blocked like `HUSKY=0 git commit`.
+- `hooks/check-guard.mjs` runs 114 cases, Bash and PowerShell, against the guard in scratch repositories. Run it after every guard change: each version this week had a regression a rerun would have caught.
+- A search behind `timeout 30` counts as a probe: finding nothing is not a failure.
+- Still unchecked, as before: a `$(...)` inside double quotes that does not start with git (`--body "$(git push --force)"`; re-reading it as shell blocked ordinary commit messages and PR bodies written with a heredoc), git behind `xargs` or `find -exec`, a program name in quotes (`g"it"`, `"bash" -c`), `bash -c -- "…"`, and PowerShell's `Start-Process git`.
+
 ## 0.11.1 — 2026-11-25
 
 Guard fixes from Easy One's port of 0.11.0 and two code reviews, each case reproduced first.

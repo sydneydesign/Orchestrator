@@ -221,12 +221,14 @@ These are a starting set. The orchestrator creates a project role when a job nee
 | `skills/stories/` | How to write, split and maintain stories, with templates |
 | `skills/install/` | The project setup, and the assets it copies |
 | `agents/` | The shipped role contracts |
-| `hooks/` | The guard |
+| `hooks/` | The guard, and `check-guard.mjs`, its cases: run `node hooks/check-guard.mjs` after changing it |
 | `CHANGELOG.md` | Changes in each version |
 
 ## Upgrading
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the changes in each version. After an update, restart the CLI.
+
+**From 0.11.1 to 0.11.2.** Nothing to change. A project with its own copy of the guard ports 0.11.2's diff of `hooks/guard.mjs` whole: `commands()`, `programIndex()` and the constants above them depend on each other, and a guard that throws lets every command through.
 
 **From 0.10.x to 0.11.0.** Nothing to change. To watch builders work in Orca, add `"orca": { "builders": "terminal" }` to `.orchestrator.json` and run the orchestrator inside Orca. Keep Orca's `orchestration` skill out of `~/.claude/skills`; `orca-cli` is fine.
 

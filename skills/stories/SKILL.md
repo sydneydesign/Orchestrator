@@ -122,3 +122,6 @@ Things the validator cannot see. Check them yourself when you write or edit a st
 - `--tests` runs the project's tests first, so each state matches the map. Without it, the last saved results count.
 - A validator error, a missing `gh` on a GitHub repository, or gg-ez's rejection stops it before anything changes, and says why.
 - `templates/reflect-in-gg-ez.yml` runs it from GitHub Actions after every merge into main.
+- `--design` shows the design phase instead: a tag `ready/<ID>[-N]` → Hecho; a tag `lock/<ID>-…` → Pantallas aprobadas; a branch `explora/<ID>`, or a commit in `src/` that opens with the ID → Diseñando; the rest → Por diseñar. It reads the tags on origin and needs the whole history (`fetch-depth: 0`).
+- `--alias NEW=OLD,OLD` makes a renumbered story's old IDs count as its own (with `--design`). `--skip CODE` leaves out an activity's stories, and gg-ez cancels their tasks. A code or a story that matches nothing stops it.
+- A story in `stories.mjs --json` that brings `reflect` (`{ tipo, estado }`, or `null` to leave it out) goes as it says.

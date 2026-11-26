@@ -8,6 +8,7 @@ import {
   badReflect,
   childEnv,
   designState,
+  optionProblems,
   gitHubName,
   hasId,
   headProblem,
@@ -172,6 +173,29 @@ describe("reflect: a story becomes a piece", () => {
     assert.deepEqual(options.skip, ["DEM"]);
     assert.equal(parseArgs(["--alias", "ACC-001"]).ok, false);
     assert.equal(parseArgs(["--skip"]).ok, false);
+    assert.equal(parseArgs(["--alias", "ACC-001=ALT-004", "--alias", "ACC-001=ALT-005"]).ok, false, "the same story twice");
+  });
+
+  it("a --skip code or an --alias story that matches nothing is named: a typo must not send for real", () => {
+    const stories = [story("ALT-001", "pending"), story("DEM-001", "works")];
+    const aliases = new Map([["ALT-001", ["NAV-002"]], ["ACC-009", ["ALT-004"]]]);
+    assert.deepEqual(optionProblems(stories, { skip: ["DEM", "DME"], aliases, design: true }), [
+      "--skip DME matches no activity",
+      "--alias ACC-009 matches no story",
+    ]);
+    assert.deepEqual(optionProblems(stories, { skip: ["DEM"], aliases: new Map([["ALT-001", ["X-1"]]]), design: true }), []);
+    assert.deepEqual(optionProblems(stories, { skip: [], aliases: new Map([["ALT-001", ["X-1"]]]), design: false }), [
+      "--alias only counts with --design",
+    ]);
+  });
+
+  it("a scope list counts the ID anywhere in it, and the ID ends at a letter too", () => {
+    const git = (subjects) => ({ tags: [], branches: [], subjects, aliases: new Map() });
+    assert.equal(designState(story("ALT-001", "pending"), git(["feat(ui, ALT-001): x"])).estado, "Diseñando");
+    assert.equal(designState(story("A11Y-001", "pending"), git(["fix(ALT-002, A11Y-001): x"])).estado, "Diseñando");
+    assert.equal(designState(story("ALT-001", "pending"), git(["ALT-001b: other"])).estado, "Por diseñar");
+    assert.equal(designState(story("ALT-001", "pending"), git(["chore(ui): ALT-001 named later"])).estado, "Por diseñar");
+    assert.equal(designState(story("ALT-007", "pending"), { ...git([]), branches: ["explora/ALT-0077"] }).estado, "Por diseñar");
   });
 
   it("a branch carries the ID as a whole word, not inside a longer one", () => {

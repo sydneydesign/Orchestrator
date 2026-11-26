@@ -85,6 +85,9 @@ export function parseArgs(args) {
       const match = String(value ?? "").match(/^([^=\s]+)=([^=\s]+)$/);
       const olds = match ? match[2].split(",").filter(Boolean) : [];
       if (!match || !olds.length) return { ok: false, error: "--alias needs NEW=OLD or NEW=OLD,OLD." };
+      if (options.aliases.has(match[1])) {
+        return { ok: false, error: `--alias ${match[1]} comes twice: put all its old IDs in one, comma-separated.` };
+      }
       options.aliases.set(match[1], olds);
     } else if (arg === "--skip" || arg.startsWith("--skip=")) {
       const [value, next] = valueOf(arg, "--skip", at);
@@ -165,6 +168,20 @@ export function badReflect(stories) {
     .map((story) => story.id);
 }
 
+/**
+ * What is wrong with --skip and --alias for these stories: a code or a story that matches nothing (a typo would
+ * send DEM to the board, or drop a story to Por diseñar), and an alias without --design, where it does nothing.
+ */
+export function optionProblems(stories, { skip, aliases, design }) {
+  const codes = new Set(stories.map((story) => story.code));
+  const ids = new Set(stories.map((story) => story.id));
+  const problems = [];
+  for (const code of skip) if (!codes.has(code)) problems.push(`--skip ${code} matches no activity`);
+  if (aliases.size && !design) problems.push("--alias only counts with --design");
+  else for (const id of aliases.keys()) if (!ids.has(id)) problems.push(`--alias ${id} matches no story`);
+  return problems;
+}
+
 const DESIGN = {
   completed: { tipo: "completed", estado: "Hecho" },
   approved: { tipo: "started", estado: "Pantallas aprobadas" },
@@ -187,7 +204,8 @@ export function designState(story, { tags, branches, subjects, aliases }) {
   if (some(tags, new RegExp(`^lock/${id}-`))) return { ...DESIGN.approved };
   if (
     some(branches, new RegExp(`^explora/${id}(?:-.*)?$`)) ||
-    some(subjects, new RegExp(`^(?:[\\w-]+\\((?:[A-Z]+-\\d+,\\s*)*)?${id}(?!\\d)`))
+    // The ID opens the subject ("ALT-007: …") or is one item of its scope ("feat(ui, ALT-008): …"), and ends there.
+    some(subjects, new RegExp(`^(?:[\\w-]+\\((?:[^()]*?,\\s*)?)?${id}(?![A-Za-z0-9])`))
   ) {
     return { ...DESIGN.designing };
   }
@@ -463,6 +481,8 @@ async function main(argv) {
   if (!stories.length) fail("There are no stories to reflect. Nothing was sent.");
   const withoutTitle = untitled(stories);
   if (withoutTitle.length) fail(`These stories have no title: ${withoutTitle.join(", ")}. Nothing was sent.`);
+  const wrongOptions = optionProblems(stories, options);
+  if (wrongOptions.length) fail(`${wrongOptions.join("; ")}. Nothing was sent.`);
   const wrongReflect = badReflect(stories);
   if (wrongReflect.length) {
     fail(`These stories bring a reflect gg-ez would not take: ${wrongReflect.join(", ")}. Nothing was sent.`);

@@ -20,12 +20,12 @@ Pick a profile for each block of work. The work decides. Write the profile and i
 
 | Profile | When | Writers | Readers |
 |---|---|---|---|
-| **Live** | The human watches the result on localhost as it lands, or the block's stories share files | One subagent at a time, in the main checkout, on the block's branch | Subagents, in parallel |
+| **Live** | The human watches the result on localhost as it lands, or the block's stories share files | One subagent at a time, in the block's worktree, which your session entered | Subagents, in parallel |
 | **Isolated** | Stories with disjoint files and parallel writers | A subagent each, with `isolation: worktree`, on its story's branch | Subagents, in your checkout |
 
 In the isolated profile, a builder runs in its own Orca terminal instead when the project opts in with `orca.builders: "terminal"` and your session runs inside Orca (`references/orca.md`). Everything else stays a subagent.
 
-When in doubt, choose live. A new worktree starts without dependencies, ignored files (`.env`, build output) or a dev server, and the human cannot see the work on localhost before the merge. In gg-ez (2026-11-18) a block of coupled UI stories ran faster live than isolated.
+When in doubt, choose live. A new worktree starts without dependencies or ignored files (`.env`, build output) unless `.orchestrator.json` → `worktree` sets them up, never with a dev server, and the human cannot see the work on localhost before the merge. In gg-ez (2026-11-18) a block of coupled UI stories ran faster live than isolated.
 
 ## Placement
 
@@ -71,7 +71,8 @@ None of these needs a rule in any text. When a lesson's failure is on this list,
 
   It asks the human before:
   - every push when `git.allowPush` is `false`;
-  - every merge into a protected branch by the orchestrator, and a pull there that is not `--ff-only`;
+  - every merge into a protected branch by the orchestrator, and a pull there that is not `--ff-only` or that names a source;
+  - switching the main checkout off a protected branch, and moving a protected branch without a checkout (`git fetch . x:main`, `git push . x:main`, `git branch -f`, `git update-ref`); role agents are blocked from both;
   - every merge or approval of a pull request by the orchestrator, through `gh pr` or `gh api`, a branch moved or deleted through `gh api`, and a `gh api` write whose payload is in a file;
   - an inline script (`node -e`, `python -c`, a heredoc) that mentions git and starts a program.
 
@@ -88,5 +89,5 @@ None of these needs a rule in any text. When a lesson's failure is on this list,
 - Experimental agent teams as the backbone: their plan approvals bypass the human, and teammates do not survive a resume.
 - Two writers on the same files. A finding or a correction on files a writer still holds goes to that writer as an extra item (skill §6.7).
 - Starting services (Docker, a database, a dev server) from a builder's shell. Start shared services yourself.
-- Editing files inside a builder's worktree while it works: its `Stop` check restores them. Edit stories in your own checkout, after the builder reports. In the live profile the builder shares your checkout: leave its files alone and commit only with `git commit -- <paths>` (`references/git.md`).
+- Editing files inside a builder's worktree while it works: its `Stop` check restores them. Edit stories in your own checkout, after the builder reports. In the live profile the builder shares your worktree: leave its files alone and commit only with `git commit -- <paths>` (`references/git.md`).
 - Opening a browser unless the brief or the human allows it. The `ui` key in `.orchestrator.json` is the human's permission for the UI check, and only for it.

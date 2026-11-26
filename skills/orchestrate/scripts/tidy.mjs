@@ -2,7 +2,9 @@
 // orchestrator tidy. Lists, and with --run removes, what a closed block leaves behind:
 //   - work folders under .orchestrator/work/ (ignored by git: a deleted folder is gone);
 //   - local branches already merged into the main branch, and their clean worktrees;
+//   - worktrees an agent left unused (.claude/worktrees/<name> on worktree-<name>, clean, never committed to);
 //   - the regenerable caches named in .orchestrator.json → tidy.caches.
+// Each worktree's .orchestrator.json → worktree.teardown runs before it is removed.
 // A work folder that a tracked file links to is kept and named: move what must last first.
 //
 //   node tidy.mjs                 preview, changes nothing
@@ -11,8 +13,9 @@
 //   node tidy.mjs --summary       one line for the session start; empty when nothing is left
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
+import { reachableElsewhere, teardown, worktreeConfig } from "./worktree.mjs";
 
 const args = process.argv.slice(2);
 const RUN = args.includes("--run");
@@ -68,8 +71,9 @@ const worktrees = [];
 {
   let wt = null;
   for (const line of (git(["worktree", "list", "--porcelain"]) ?? "").split(/\r?\n/)) {
-    if (line.startsWith("worktree ")) { wt = { path: line.slice(9), branch: null }; worktrees.push(wt); }
+    if (line.startsWith("worktree ")) { wt = { path: line.slice(9), branch: null, locked: false }; worktrees.push(wt); }
     else if (line.startsWith("branch refs/heads/") && wt) wt.branch = line.slice(18);
+    else if (line.startsWith("locked") && wt) wt.locked = true;
   }
 }
 const mainPath = worktrees[0]?.path;
@@ -77,7 +81,10 @@ const mainPath = worktrees[0]?.path;
 const mainCheckout = worktrees.find((w) => w.branch === mainBranch)?.path;
 // A branch counts as merged only if it ever had commits of its own. One that was created and never
 // committed to has a single entry in its reflog, wherever main has moved since. Without a reflog it is kept.
-const hadOwnCommits = (b) => (git(["reflog", "show", "--format=%H", `refs/heads/${b}`]) ?? "").trim().split(/\r?\n/).filter(Boolean).length > 1;
+const reflogLength = (b) => (git(["reflog", "show", "--format=%H", `refs/heads/${b}`]) ?? "").trim().split(/\r?\n/).filter(Boolean).length;
+const hadOwnCommits = (b) => reflogLength(b) > 1;
+// -D only for a branch whose commits all live elsewhere: one reflog entry alone can mislead.
+const neverCommitted = (b) => reflogLength(b) === 1;
 const merged = mainBranch
   ? (git(["branch", "--merged", mainBranch, "--format=%(refname:short)"]) ?? "").split(/\r?\n/).map((s) => s.trim())
       .filter((b) => b && !protectedBranches.includes(b) && b !== current && !keep.has(b) && !names(stateText, b)
@@ -102,6 +109,24 @@ const reasonToKeep = (b) => {
 const branches = merged.filter((b) => !reasonToKeep(b));
 const busy = merged.filter((b) => reasonToKeep(b));
 
+// ---------- worktrees an agent left unused. Claude Code removes its own; with the project's WorktreeCreate
+// hook (.orchestrator.json → worktree) it keeps them, so they end here. Locked ones are Claude Code's.
+const agentDir = mainPath ? path.join(mainPath, ".claude", "worktrees") : null;
+// An agent that has just started has not edited anything yet: a worktree touched in the last hour may be in use.
+const idle = (w) => { try { const g = git(["rev-parse", "--git-dir"], w.path)?.trim(); const times = [statSync(w.path).mtimeMs, ...(g ? [statSync(path.resolve(w.path, g)).mtimeMs] : [])]; return Date.now() - Math.max(...times) > 3600e3; } catch { return false; } };
+const unusedCandidates = agentDir ? worktrees.filter((w) => path.dirname(path.resolve(w.path)) === path.resolve(agentDir)
+  && w.branch === `worktree-${path.basename(w.path).replace(/\+/g, "/")}` && !w.locked && existsSync(w.path) && path.resolve(w.path) !== path.resolve(root)
+  && !keep.has(w.branch) && !keep.has(path.basename(w.path)) && !names(stateText, w.branch) && !names(stateText, path.basename(w.path))
+  && neverCommitted(w.branch) && (git(["status", "--porcelain"], w.path) ?? "x").trim() === "" && !hasReports(w) && idle(w)) : [];
+// A worktree-<name> branch whose worktree is gone and that never had commits holds nothing.
+const strayCandidates = (git(["branch", "--list", "worktree-*", "--format=%(refname:short)"]) ?? "").split(/\r?\n/).map((s) => s.trim())
+  .filter((b) => b && !worktrees.some((w) => w.branch === b) && neverCommitted(b) && !keep.has(b) && !names(stateText, b));
+// -D only when every commit also lives on a branch or remote that stays: never on one another.
+const doomed = [...unusedCandidates.map((w) => w.branch), ...strayCandidates];
+const safe = (b) => reachableElsewhere(root, b, doomed.filter((d) => d !== b));
+const unusedWorktrees = unusedCandidates.filter((w) => safe(w.branch));
+const strayBranches = strayCandidates.filter(safe);
+
 // ---------- caches the project declared regenerable; only ignored paths that hold no tracked file
 const caches = [].concat(config.tidy?.caches ?? []).filter((c) => typeof c === "string" && c.trim())
   .filter((c) => existsSync(path.join(root, c)) && git(["check-ignore", "-q", c]) !== null && (git(["ls-files", "--", c]) ?? "x").trim() === "");
@@ -110,6 +135,8 @@ if (SUMMARY) {
   const parts = [];
   if (removableWork.length) parts.push(`${removableWork.length} work folder(s)`);
   if (mainCheckout && branches.length) parts.push(`${branches.length} merged branch(es)`);
+  if (unusedWorktrees.length) parts.push(`${unusedWorktrees.length} unused agent worktree(s)`);
+  if (strayBranches.length) parts.push(`${strayBranches.length} leftover agent branch(es)`);
   if (caches.length) parts.push(`${caches.length} cache folder(s)`);
   if (parts.length) process.stdout.write(`Left from earlier blocks: ${parts.join(", ")}. If no block is in progress, run the tidy step of the close (§9).`);
   process.exit(0);
@@ -128,6 +155,10 @@ if (!merged.length) say("  none");
 for (const b of branches) say(`  ${b}${worktreeOf(b) ? `  (and its worktree ${worktreeOf(b).path})` : ""}`);
 for (const b of busy) say(`  KEEP ${b}: ${reasonToKeep(b)}.`);
 if (merged.length && !mainCheckout) say(`  Not removed: ${mainBranch} is not checked out in any worktree here, so git cannot judge them safely.`);
+say("\nUnused agent worktrees (.claude/worktrees/, never committed to):");
+if (!unusedWorktrees.length && !strayBranches.length) say("  none");
+for (const w of unusedWorktrees) say(`  ${w.path}  (and ${w.branch})`);
+for (const b of strayBranches) say(`  ${b}  (branch only)`);
 say("\nCaches (.orchestrator.json → tidy.caches):");
 if (!caches.length) say("  none");
 for (const c of caches) say(`  ${c}`);
@@ -135,12 +166,28 @@ for (const c of caches) say(`  ${c}`);
 if (!RUN) process.exit(0);
 
 const failed = [];
+// The project's teardown first (a cache the dev server holds, a design tool's list); a failure keeps the worktree.
+// Checked before teardown: a worktree git would then refuse to remove must keep its setup.
+const removeTree = (w) => {
+  if (w.locked) { failed.push(`worktree ${w.path} (locked)`); return false; }
+  // Only a checked-out submodule stops git; one not initialised (a line starting with -) does not.
+  if ((git(["-C", w.path, "submodule", "status"]) ?? "").split(/\r?\n/).some((l) => l.trim() && !l.startsWith("-"))) { failed.push(`worktree ${w.path} (has submodules; git will not remove it)`); return false; }
+  const dirty = git(["-C", w.path, "status", "--porcelain"]);
+  if (dirty === null || dirty.trim()) { failed.push(`worktree ${w.path} (has changes)`); return false; }
+  try { teardown(w.path, mainPath, worktreeConfig(w.path, mainPath)); }
+  catch (e) { failed.push(`worktree ${w.path} (teardown: ${e.message})`); return false; }
+  if (git(["worktree", "remove", w.path]) === null) { failed.push(`worktree ${w.path}`); return false; }
+  return true;
+};
 for (const n of removableWork) rmSync(path.join(workDir, n), { recursive: true, force: true });
 for (const b of mainCheckout ? branches : []) {
   const w = worktreeOf(b);
-  if (w && existsSync(w.path) && git(["worktree", "remove", w.path]) === null) { failed.push(`worktree ${w.path}`); continue; }
+  if (w && existsSync(w.path) && !removeTree(w)) continue;
   if (git(["branch", "-d", b], mainCheckout) === null) failed.push(`branch ${b}`);
 }
+// Never committed to: -D loses nothing, and -d would judge against whatever is checked out.
+for (const w of unusedWorktrees) if (removeTree(w) && git(["branch", "-D", w.branch]) === null) failed.push(`branch ${w.branch}`);
+for (const b of strayBranches) if (git(["branch", "-D", b]) === null) failed.push(`branch ${b}`);
 for (const c of caches) rmSync(path.join(root, c), { recursive: true, force: true });
 say(failed.length ? `\nNot removed: ${failed.join(", ")}. Look at each one; never force it.` : "\nDone.");
 process.exit(failed.length ? 1 : 0);

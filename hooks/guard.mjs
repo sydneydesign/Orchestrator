@@ -93,6 +93,44 @@ function midRebase(dir) {
   } catch { return false; }
 }
 
+// The main checkout: the folder whose .git is the repository's own. A linked worktree (git worktree add,
+// Claude Code's, Orca's) has a .git file pointing there. Null outside a repository.
+// git worktree list names the main worktree first; a bare repository (worktrees only) has none.
+function mainCheckout(dir) {
+  try {
+    const first = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: dir, stdio: ["ignore", "pipe", "ignore"] }).toString().split(/\r?\n\r?\n/)[0];
+    if (/^bare$/m.test(first)) return null;
+    const p = /^worktree (.+)$/m.exec(first)?.[1];
+    return p ? realpathIf(p) : null;
+  } catch { return null; }
+}
+// A role agent, or a worker: a session launched in a linked worktree (by hand, or a tab Orca opened). Neither
+// touches the main checkout or a protected branch; the orchestrator is asked instead. Where a session was launched
+// is CLAUDE_PROJECT_DIR: it stays the main checkout after the orchestrator enters a block's worktree
+// (EnterWorktree), through compactions, resumes and /clear (tested with Claude Code 2.1.332).
+const launchDir = process.env.CLAUDE_PROJECT_DIR || cwd;
+let workerMemo;
+const isWorker = () => (workerMemo ??= Boolean(mainCheckout(launchDir) && !isMainCheckout(launchDir)));
+const restricted = () => inSubagent || isWorker();
+// Runs before realish is defined (SessionStart), so it resolves links on its own.
+function realpathIf(p) { try { return realpathSync(p); } catch { return p; } }
+function isMainCheckout(dir) { const t = toplevel(dir), m = mainCheckout(dir); return Boolean(t && m && realpathIf(t) === m); }
+// A reset to a commit other than HEAD's moves the branch; git reset HEAD only unstages.
+function resetMoves(dir, ref) {
+  if (!isBranchOrCommit(dir, ref)) return false;
+  try {
+    const at = (r) => execFileSync("git", ["rev-parse", r + "^{commit}"], { cwd: dir, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    return at(ref) !== at("HEAD");
+  } catch { return true; }
+}
+// Whether a checkout argument names a branch or a commit (a switch), not a file.
+function isBranchOrCommit(dir, ref) {
+  if (!ref) return false;
+  try { execFileSync("git", ["rev-parse", "--verify", "--quiet", ref + "^{commit}"], { cwd: dir, stdio: "ignore" }); return true; } catch {}
+  // git checkout <name> also creates a branch from a remote's <name>.
+  try { return execFileSync("git", ["for-each-ref", "--format=%(refname)", `refs/remotes/*/${ref}`], { cwd: dir, stdio: ["ignore", "pipe", "ignore"] }).toString().trim() !== ""; } catch { return false; }
+}
+
 function currentBranch(dir) {
   try { return execFileSync("git", ["symbolic-ref", "--short", "HEAD"], { cwd: dir, stdio: ["ignore", "pipe", "ignore"] }).toString().trim(); }
   catch { return null; }
@@ -108,16 +146,30 @@ if (input.hook_event_name === "SessionStart") {
     debt = execFileSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "skills", "orchestrate", "scripts", "tidy.mjs"), "--summary"],
       { cwd: root, stdio: ["ignore", "pipe", "ignore"], timeout: 8000 }).toString().trim();
   } catch {}
+  // One orchestrator per repository: the session in the main checkout. A session opened in a linked worktree
+  // (by hand, or a tab Orca opened) is a worker on that worktree's branch.
+  // (Easy One, 2026-11-26: a session Sydney opened in an Orca worktree loaded the orchestrator's procedure too.)
+  const main = mainCheckout(cwd);
+  if (isWorker()) {
+    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart",
+      additionalContext: `This project uses orchestrator, and its orchestrator is the session in the main checkout (${main}). This session runs in a linked worktree on its own branch: you are a worker here, not the orchestrator. Do not load the orchestrator:orchestrate skill. Work and commit on this worktree's branch only; never switch, commit in or merge into the main checkout. The human merges your branch through the orchestrator.` } }));
+    process.exit(0);
+  }
+  const b = main ? currentBranch(main) : null;
+  const off = b && !protectedBranches.includes(b)
+    ? ` The main checkout is on ${b}, not ${protectedBranches[0]}: the human merges from this folder, so switch it back to ${protectedBranches[0]} once that branch's work is safe, and run blocks in a worktree.` : "";
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart",
-    additionalContext: "This project uses orchestrator. You are the orchestrator: load the orchestrator:orchestrate skill before any work and follow it. Delegate through the Agent tool (references/harness.md)." + (debt ? ` ${debt}` : "") } }));
+    additionalContext: "This project uses orchestrator. You are the orchestrator: load the orchestrator:orchestrate skill before any work and follow it. Delegate through the Agent tool (references/harness.md)." + off + (debt ? ` ${debt}` : "") } }));
   process.exit(0);
 }
 
 // ---------- PreToolUse: a role never takes the orchestrator's procedure
 
-if (input.hook_event_name === "PreToolUse" && input.tool_name === "Skill" && inSubagent
-  && /(^|:)orchestrate$/.test(String(input.tool_input?.skill ?? ""))) {
-  block(`you are ${agentType}, not the orchestrator. Follow your brief; report NEEDS_CONTEXT when it does not cover something.`);
+if (input.hook_event_name === "PreToolUse" && input.tool_name === "Skill" && /(^|:)orchestrate$/.test(String(input.tool_input?.skill ?? ""))) {
+  if (inSubagent) block(`you are ${agentType}, not the orchestrator. Follow your brief; report NEEDS_CONTEXT when it does not cover something.`);
+  // A session that started in a linked worktree is a worker. The orchestrator itself may move into one later
+  // (EnterWorktree), after it loaded the skill in the main checkout.
+  if (isWorker()) block(`the orchestrator is the session in the main checkout (${mainCheckout(cwd)}). This session was launched in a linked worktree: you are a worker on its branch.`);
 }
 
 // ---------- PreToolUse: file edits
@@ -332,6 +384,11 @@ function checkGh(args) {
   const approves = (area === "pr" && verb === "review" && args.some((t, i) => !GH_VALUE_FLAGS.test(args[i - 1] ?? "") && (/^-[a-zA-Z]*a[a-zA-Z]*$/.test(t) || /^--approve(=|$)/.test(t))))
     || (api && /\bevent["':=\s]*APPROVE\b/i.test(all));
   if (merges && args.some((t) => /^--admin(=|$)/.test(t))) block("gh pr merge --admin skips the branch protection. Merge through the normal checks.");
+  // A worker merges, approves and moves nothing either; it is not held to reads only.
+  if (!inSubagent && restricted()) {
+    if (merges || approves || movesRef) block("a worker session never merges, approves or moves a branch on GitHub. The orchestrator does, with the product owner's confirmation.");
+    if (((area === "pr" && /^(checkout|co)$/.test(verb)) || area === "co") && isMainCheckout(here)) block("a worker session never switches the main checkout.");
+  }
   if (inSubagent) {
     if (merges) block("role agents never merge. The product owner merges, or asks the orchestrator to.");
     if (approves) block("role agents never approve a pull request.");
@@ -345,6 +402,11 @@ function checkGh(args) {
   if (area && !api && !GH_AREAS.test(area)) confirm(`gh ${area} is not one of gh's own commands: an alias or an extension. Confirm it does not merge or approve.`);
   if (filePayload) confirm("this gh api call reads its payload from a file the guard cannot read. Confirm it does not merge or approve.");
   if (movesRef) confirm("moving or deleting a branch on GitHub is the product owner's call. Confirm they asked for it.");
+  // gh pr checkout switches the folder it runs in, like git switch.
+  if ((area === "pr" && /^(checkout|co)$/.test(verb)) || area === "co") {
+    const b = currentBranch(here);
+    if (b && protectedBranches.includes(b) && isMainCheckout(here)) confirm(`the main checkout stays on ${b}: the human merges from it. Check the pull request out in a worktree instead. Confirm the human wants this folder switched.`);
+  }
   if (merges) confirm("a merge is the product owner's call. Confirm they asked for this one.");
   if (approves) confirm("approving a pull request is the product owner's call. Confirm they asked for this one.");
 }
@@ -408,10 +470,72 @@ function checkGit(args) {
       // undoes. Rebase, cherry-pick, am and revert write commits of their own there: blocked.
       // (Easy One, 2026-11-26: the human typed every merge into main, even the smallest.)
       const undoes = has(/^--(abort|quit)$/);
-      if (inSubagent || !["merge", "pull"].includes(sub)) block(`git ${sub} on ${b} is blocked. Merging into ${b} is the orchestrator's, with the product owner's confirmation.`);
+      if (restricted() || !["merge", "pull"].includes(sub)) block(`git ${sub} on ${b} is blocked. Merging into ${b} is the orchestrator's, with the product owner's confirmation.`);
       // A plain git pull --ff-only brings the branch's own upstream; one that names a source can bring any branch.
       else if (!undoes && !(sub === "pull" && has(/^--ff-only$/) && rest.every((x) => /^-/.test(x)))) confirm(`merging into ${b} is the product owner's call. Confirm they accepted what this merge brings.`);
     }
+  }
+  // The human's checkout stays on the protected branch: the human merges from it, and a session that moves it
+  // makes their next merge land elsewhere. Blocks run in a worktree. Roles never switch it; the orchestrator
+  // is asked. (Easy One, 2026-11-26: a session switched the main checkout to explora/botones and the human's
+  // merge into main fast-forwarded that branch instead.)
+  const loose0 = () => rest.find((a) => !/^-/.test(a)) ?? "";
+  const dd = rest.indexOf("--");
+  const before = dd >= 0 ? rest.slice(0, dd) : rest;
+  const pathsAfter = dd >= 0 && rest.length > dd + 1;
+  const swLoose = before.filter((a) => a === "-" || !/^-/.test(a));
+  const switches = sub === "switch" ? !has(/^(-h|--help)$/)
+    : sub === "checkout" && !pathsAfter && !has(/^(-p|--patch)$/) && (has(/^-[a-zA-Z]*[bB]|^--orphan(=|$)|^--detach$/)
+      || (swLoose.length === 1 && (swLoose[0] === "-" || /^@\{-\d+\}$/.test(swLoose[0]) || isBranchOrCommit(dirArg, swLoose[0]))));
+  // symbolic-ref HEAD <ref> and bisect move HEAD without a checkout.
+  const movesHead = (sub === "symbolic-ref" && /^HEAD$/.test(loose0()) && rest.filter((a) => !/^-/.test(a)).length >= 2)
+    || (sub === "bisect" && (/^(good|bad|old|new|skip|checkout|run)$/.test(loose0()) || (loose0() === "start" && rest.filter((a) => !/^-/.test(a)).length > 1)));
+  const onProtected = () => { const b = currentBranch(dirArg); return b && protectedBranches.includes(b) ? b : null; };
+  const target = sub === "switch" ? swLoose.find((a) => a !== "-") : swLoose[0];
+  const noop = !has(/^-[a-zA-Z]*[bBcCd][a-zA-Z]*$|^--(orphan|detach|create|force-create)$/) && target && target === currentBranch(dirArg);
+  // A role agent or a worker never changes the human's checkout, whatever branch it is on.
+  if (restricted() && !inSubagent && isMainCheckout(dirArg) && (switches || movesHead || ["commit", "merge", "rebase", "cherry-pick", "pull", "am", "revert", "reset", "stash"].includes(sub))) {
+    block("a worker session never changes the main checkout: the human merges from it. Work in your own worktree.");
+  }
+  if (((switches && !noop) || movesHead) && isMainCheckout(dirArg)) {
+    const b = onProtected();
+    if (b) {
+      if (restricted()) block(`the main checkout stays on ${b}: the human merges from it. Work in your own worktree.`);
+      confirm(`the main checkout stays on ${b}: the human merges from it. Run the block in a worktree instead. Confirm the human wants this folder switched.`);
+    }
+  }
+  // Moving a protected branch without a merge command is a merge too: git fetch . x:main, git push origin x:main,
+  // git branch -f / -M / -C onto main, git update-ref refs/heads/main, git reset <commit> while on main.
+  const loose = rest.filter((a) => !/^-/.test(a));
+  // A glob that can expand to a protected branch (refs/heads/*) counts as naming it.
+  const protRef = (r) => { const n = String(r).replace(/^\+/, "").replace(/^refs\/heads\//, ""); return protectedBranches.includes(n) || (n.includes("*") && protectedBranches.some((p) => new RegExp(`^${n.split("*").map((x) => x.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`).test(p))); };
+  const destOf = (spec) => spec.includes(":") ? spec.split(":").pop() : null;
+  const srcOf = (spec) => spec.replace(/^\+/, "").split(":")[0];
+  const branchForce = has(/^(-f|--force|-[a-zA-Z]*f[a-zA-Z]*)$/);
+  const branchMove = has(/^(-M|-C)$/) || (has(/^(-m|-c|--move|--copy)$/) && branchForce);
+  const branchRename = has(/^(-m|-M|--move)$/);
+  const movesProtected = (sub === "fetch" && loose.some((a) => protRef(destOf(a) ?? "")))
+    || (sub === "push" && loose.slice(1).some((a) => {
+      const dest = destOf(a);
+      // :main deletes it; --delete main and -d main too.
+      if (dest !== null && srcOf(a) === "") return protRef(dest);
+      if (has(/^(-d|--delete)$/)) return protRef(a);
+      if (!protRef(dest ?? "")) return false;
+      const bare = String(dest).replace(/^\+?refs\/heads\//, "");
+      return srcOf(a) !== bare && !(srcOf(a) === "HEAD" && currentBranch(dirArg) === bare);
+    }))
+    || (sub === "branch" && branchForce && !branchMove && protRef(loose[0] ?? ""))
+    || (sub === "branch" && branchMove && protRef(loose.at(-1) ?? ""))
+    || (sub === "branch" && branchRename && (loose.length === 2 ? protRef(loose[0]) : loose.length === 1 && Boolean(onProtected())))
+    // update-ref: any argument, past -m's message; --stdin reads refs the guard cannot see.
+    || (sub === "branch" && has(/^(-d|-D|--delete)$/) && loose.some(protRef))
+    // checkout -B main / switch -C main reset main wherever they run, a worktree included.
+    || (((sub === "checkout" && has(/^-[a-zA-Z]*B/)) || (sub === "switch" && has(/^(-[a-zA-Z]*C|--force-create)$/))) && protRef(rest.find((a, i) => /^(-[a-zA-Z]*[BC]|--force-create)$/.test(rest[i - 1] ?? "")) ?? rest.find((a) => /^-[a-zA-Z]*B./.test(a))?.replace(/^-[a-zA-Z]*B/, "") ?? ""))
+    || (sub === "update-ref" && (has(/^--stdin$/) || ((r) => protRef(r) || (/^(HEAD|@)$/.test(r) && !has(/^--no-deref$/) && Boolean(onProtected())))(rest.filter((a, i) => !/^-/.test(a) && rest[i - 1] !== "-m")[0] ?? "")))
+    || (sub === "reset" && !has(/^--hard$/) && !pathsAfter && before.filter((a) => !/^-/.test(a)).length === 1 && resetMoves(dirArg, before.find((a) => !/^-/.test(a))) && Boolean(onProtected()));
+  if (movesProtected) {
+    if (restricted()) block("role agents never move a protected branch. The orchestrator merges, with the product owner's confirmation.");
+    confirm("this moves a protected branch: it is a merge. Confirm the product owner accepted what it brings.");
   }
   if (sub === "add" && broadAddBlocked && rest.some((a) => /^(-A|--all|-u|--update|\.|\.\/|:\/|\*)$/.test(a))) {
     block("broad `git add` is blocked. Stage the story's files by name.");

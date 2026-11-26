@@ -42,6 +42,8 @@ An agent that writes code, judges its own work and reports its own progress tend
 3. **Every story follows one flow.** Ready check, then a branch. The builder writes the acceptance tests first, watches them fail, and makes them pass. The orchestrator locks the tests. One independent review follows, then at most one fix round, then the human's acceptance.
 4. **The guard enforces the rules that matter most.** It is a hook, so it applies whatever an agent's prompt says.
 
+There is one orchestrator per repository: the session in the main checkout. A session you open in a linked worktree (by hand, or a tab Orca opens) starts as a worker on that worktree's branch. The main checkout stays on the main branch, because you merge from it: the orchestrator runs its blocks in a worktree it enters.
+
 The plugin does nothing in a project without `.orchestrator.json`. In a project that has one, a session-start hook tells the main session to load the `orchestrate` skill.
 
 ## Requirements
@@ -115,7 +117,7 @@ Talk to the main session in plain language: "build the password reset story", "r
 - comes back to you only for a product call, an irreversible action (push, merge, deploy, delete), what the tests cannot prove, and acceptance;
 - writes to you in product terms: the story's title first, its ID in parentheses, and code tokens kept out of the way.
 
-For visual work you want to iterate on quickly, ask for **exploration**. The orchestrator edits directly on an `explore/<topic>` branch while you watch. When you keep the result, it turns it into stories, tests and one review in a single pass, and the options you did not keep leave the code. Screenshots stay in `.orchestrator/work/` and never enter git.
+For visual work you want to iterate on quickly, ask for **exploration**. The orchestrator edits directly on an `explore/<topic>` branch, in a worktree of its own, while you watch. Your checkout stays on `main`. When you keep the result, it turns it into stories, tests and one review in a single pass, and the options you did not keep leave the code. Screenshots stay in `.orchestrator/work/` and never enter git.
 
 When you ask for a push, the orchestrator opens one pull request per story and looks after it until it is merged or closed. The title is the story ID and what a person notices. The body says what changed, shows before and after screenshots for visible changes, and gives honest evidence: who checked what and how, what nobody could check, each criterion's state, the commands that passed and the reviewers' verdicts. The screenshots go to a `pr-assets` branch that is never merged, so they stay out of the main branch. `watch-pr.mjs` watches the PR in the background and wakes the orchestrator for a failing check, a conflict, a new comment, or when the PR is ready to merge. Fixes go through a builder on the same branch. After three failed pushes for one issue, a redesign asked in review, or an open security point, the orchestrator stops and asks you. The guard asks you before every merge and every approval, and role agents only read GitHub.
 
@@ -173,6 +175,7 @@ A bug is never a new story: it is a failing marker on the criterion it breaks. A
 | `design` | The design source. Enables the `designer` role. |
 | `roles` | Project roles and whether each one may write |
 | `orca.builders` | Optional. `"terminal"` runs each builder of an isolated block in its own Orca terminal, so you can watch it, when the orchestrator runs inside Orca. Everything else stays a subagent. See `skills/orchestrate/references/orca.md`. |
+| `worktree` | Optional. What a new worktree needs before an agent starts in it: `setup` commands (an install, a code generator), ignored files to `copy` (`.env`), and `teardown` commands for its removal. The install registers `.orchestrator/worktree.mjs` as Claude Code's worktree hooks only when this key exists. |
 | `tidy.caches` | Optional. Ignored folders that rebuild themselves and grow (a screenshot cache, for example). The close clears them. |
 | `git` | Protected branches, whether pushes need confirmation, broad `git add`, the code owner |
 | `git.mergeMethod` | Optional. How the orchestrator merges a PR when you ask: `"merge"` (default) or `"squash"`. |
@@ -186,6 +189,8 @@ A project's `CLAUDE.md` can adjust the process. For example, a prototype with de
 `hooks/guard.mjs` runs on session start, before shell commands and file edits, and when an agent stops. It blocks:
 
 - commits, rebases and cherry-picks on protected branches, and merges there by role agents;
+- a role agent switching the main checkout off the main branch, or moving a protected branch without a checkout (`git fetch . x:main`); the orchestrator is asked instead;
+- a session in a linked worktree loading the orchestrator's procedure;
 - force pushes, `--no-verify`, `HUSKY=0`, and changes to `core.hooksPath`;
 - broad `git add` and `commit -a`, and a branch switch and a commit in one command;
 - `reset --hard`, `clean -f`, and `checkout .` / `restore .`;
@@ -223,7 +228,7 @@ These are a starting set. The orchestrator creates a project role when a job nee
 
 | Path | Contents |
 |---|---|
-| `skills/orchestrate/` | The orchestrator's operating procedure, with references for the harness, git and roles, `scripts/tidy.mjs` for the close, `scripts/launch.mjs` to run a builder in an Orca terminal, and `scripts/pr-assets.mjs` and `scripts/watch-pr.mjs` for pull requests |
+| `skills/orchestrate/` | The orchestrator's operating procedure, with references for the harness, git and roles, `scripts/tidy.mjs` for the close, `scripts/launch.mjs` to run a builder in an Orca terminal, `scripts/worktree.mjs` to set up and remove worktrees, and `scripts/pr-assets.mjs` and `scripts/watch-pr.mjs` for pull requests |
 | `skills/stories/` | How to write, split and maintain stories, with templates |
 | `skills/install/` | The project setup, and the assets it copies |
 | `agents/` | The shipped role contracts |
@@ -233,6 +238,8 @@ These are a starting set. The orchestrator creates a project role when a job nee
 ## Upgrading
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the changes in each version. After an update, restart the CLI.
+
+**From 0.12.0 to 0.13.0.** Nothing to change for the hierarchy: the guard and the procedure carry it. A project whose own rules have the orchestrator switch the main checkout (a live block, an exploration) drops that rule. To give isolated agents a ready worktree, add `"worktree": { "setup": [...], "copy": [...], "teardown": [...] }` to `.orchestrator.json` and rerun `/orchestrator:install`, or do its step 5.3 by hand: copy `scripts/worktree.mjs` to `.orchestrator/worktree.mjs` and register the two hooks. With the hooks, Claude Code keeps every subagent's worktree when it finishes; the close's `tidy.mjs` removes the ones nobody committed to. A project with its own copy of `tidy.mjs` or `launch.mjs` copies `worktree.mjs` next to it, since both import it.
 
 **From 0.11.2 to 0.12.0.** Copy `stories.mjs` into the project again for `--pr --link`. Optional keys: `git.mergeMethod`, `git.trustedBots`, `git.ignoredChecks`. The guard now asks before the orchestrator's merges into the main branch instead of blocking them: a project rule that the human types the merge can go. A project with its own copy of the guard ports 0.12.0's diff of `hooks/guard.mjs` whole and runs `hooks/check-guard.mjs` against it.
 

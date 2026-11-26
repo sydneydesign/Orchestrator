@@ -20,13 +20,13 @@ From the project root, with the brief written as for a subagent:
 node <skill dir>/scripts/launch.mjs --story <ID> --branch story/<ID>-<slug> --brief .orchestrator/work/<ID>/brief.md --mode <your own permission mode>
 ```
 
-The script checks that Orca still has every command it uses, refuses uncommitted stories or `.orchestrator.json`, creates the Orca worktree on the story's branch from your current branch (`--base` to change it), opens `claude --agent orchestrator:builder` there, waits for Claude, and hands it the brief with `orca orchestration worker-start --terminal`. It prints the terminal handle, dispatch and run IDs.
+The script checks that Orca still has every command it uses, refuses uncommitted stories or `.orchestrator.json`, creates the Orca worktree on the story's branch from your current branch (`--base` to change it) and runs the project's `worktree` setup in it, opens `claude --agent orchestrator:builder` there, waits for Claude, and hands it the brief with `orca orchestration worker-start --terminal`. It prints the terminal handle, dispatch and run IDs.
 
 - **It stops on a prompt** (folder trust, an MCP approval, the bypass warning). That prompt is the human's: tell them, never answer it. When they have, rerun the same command with `--terminal <handle>`.
 - **Then end your turn.** Orca wakes you with a message naming a `check` command when the builder reports (`worker_done`) or asks (`ask`). Run it, read the report file as for a subagent, answer a question with `orca orchestration reply --id <message_id> --body "..."`. Do not poll.
 - **Steer it** with `orca orchestration send --to dispatch:<id> --subject "..." --body "..."`, never by typing in its terminal.
 - **After its report**, close its terminal: `orca terminal close --terminal <handle>`. Orca keeps it otherwise (it counts as a terminal it did not start).
-- **At the close**, remove its worktree through Orca before `tidy.mjs`: `orca worktree rm --worktree branch:<branch>` once the branch is merged.
+- **At the close**, once the branch is merged, run `node <skill dir>/scripts/worktree.mjs teardown <worktree path>`, then remove the worktree through Orca before `tidy.mjs`: `orca worktree rm --worktree branch:<branch>`.
 
 ## What this relies on
 

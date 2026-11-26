@@ -54,7 +54,7 @@ When it exits, act on each event, then start it again, until `merged` or `closed
 | Event | What you do |
 |---|---|
 | `checks_failed` | Read why (`gh run view <run> --log-failed` for a GitHub Actions check). Send the fix to a builder on the same branch with a fix brief (skill §6.7). A failure the change did not cause (an outside service, a flaky test): rerun it once, then tell the human. |
-| `conflict` | Merge the base in yourself, where the story branch is checked out: your checkout in the live profile; in the isolated profile, the builder's worktree, with `git -C <worktree path>` (your checkout cannot switch to a branch a worktree holds). `git fetch`, then `git merge origin/<base>`. Never rebase. A resolution that changes behaviour goes to a builder with a fix brief. Run `verify.onBuilderStop`, commit, push. |
+| `conflict` | Merge the base in yourself, where the story branch is checked out: the block's worktree, where your session is, in the live profile; in the isolated profile, the builder's worktree, with `git -C <worktree path>` (your checkout cannot switch to a branch a worktree holds). `git fetch`, then `git merge origin/<base>`. Never rebase. A resolution that changes behaviour goes to a builder with a fix brief. Run `verify.onBuilderStop`, commit, push. |
 | `comments` | See **Comments** below. |
 | `behind` | The base moved and the project requires an up-to-date branch. Merge the base in as for `conflict`, then run `verify.onBuilderStop`, commit and push. |
 | `ready` | Tell the human in one line, with the PR link, that it is ready to merge. When they ask, merge with `gh pr merge <n> --merge`, or the method in `git.mergeMethod`. |

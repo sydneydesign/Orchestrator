@@ -73,8 +73,17 @@ Insert `assets/claude-md-block.md`, filled and translated, into the root `CLAUDE
 
 ## Step 5: prepare git
 
-1. Create `.orchestrator/` with an empty `locked-tests.txt` and a `state.md` that says "No work in progress." Add `.orchestrator/work/` to `.gitignore`; keep `locked-tests.txt` and `state.md` tracked.
+1. Create `.orchestrator/` with an empty `locked-tests.txt` and a `state.md` that says "No work in progress." Add `.orchestrator/work/` and `.claude/worktrees/` to `.gitignore` (live blocks run in a worktree there); keep `locked-tests.txt` and `state.md` tracked.
 2. If several people share the repository, offer the human the optional GitHub settings in the `orchestrate` skill's `references/git.md`. Do not apply them yourself.
+3. **Worktrees.** Measure what a fresh worktree needs: `git worktree add` one, run `verify.onBuilderStop` in it, and note what made it pass. Commands (an install, a code-graph build) go to `worktree.setup`, ignored files (`.env`) to `worktree.copy`, and what removal must undo (a cache a tool keeps, a list a design canvas keeps) to `worktree.teardown`. Remove the worktree. If it needed nothing, remove the `worktree` key and skip the rest of this item: Claude Code then makes worktrees itself.
+   Otherwise copy the `orchestrate` skill's `scripts/worktree.mjs` to `.orchestrator/worktree.mjs` unchanged and commit it, and merge these hooks into `.claude/settings.json`:
+
+   ```json
+   "hooks": {
+     "WorktreeCreate": [{ "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PROJECT_DIR}/.orchestrator/worktree.mjs", "create"] }] }],
+     "WorktreeRemove": [{ "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PROJECT_DIR}/.orchestrator/worktree.mjs", "remove"] }] }]
+   }
+   ```
 
 ## Step 6: verify the install
 
@@ -82,6 +91,7 @@ Insert `assets/claude-md-block.md`, filled and translated, into the root `CLAUDE
 - Every command in `.orchestrator.json` runs.
 - Every path cited in the `CLAUDE.md` block exists.
 - `node <storiesDir>/stories.mjs --tests --check` passes. CI runs the same command.
+- With a `worktree` key: a throwaway subagent with `isolation: "worktree"` runs `verify.onBuilderStop` as its first command, and it passes. Then remove its worktree with `node .orchestrator/worktree.mjs teardown <path>` and `git worktree remove <path>`.
 - The guard is active: ask the human to try `git push --force` in a fresh session and confirm it is blocked. If hooks do not run on this machine, record it in the `CLAUDE.md` block; the agents still carry the same rules in their prompts.
 - **The delegation mechanism works.** Prove the chain once, now, with the smallest real delegation, not by reading the documentation. Launch a throwaway `orchestrator:researcher` subagent. Its brief: run `echo probe > guard-probe.txt`, report the output, and write a report file. Its report must show the guard's `orchestrator: researcher is read-only` message. If `guard-probe.txt` appears instead, delete it: the plugin does not load for subagents here (check its install scope). The install is not done.
 

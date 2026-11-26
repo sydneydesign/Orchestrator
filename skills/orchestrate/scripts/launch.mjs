@@ -7,7 +7,8 @@
  *
  *   1. check that Orca still has the commands this script uses (an update fails here, not halfway);
  *   2. refuse while the stories have uncommitted changes, and a second builder for the same story;
- *   3. find the Orca worktree on the story's branch, or create it from --base;
+ *   3. find the Orca worktree on the story's branch, or create it from --base and run the project's
+ *      .orchestrator.json → worktree copy and setup there (worktree.mjs);
  *   4. open a terminal there running `claude --agent orchestrator:builder --permission-mode <mode>`;
  *   5. wait for Claude, and stop on any prompt (folder trust, MCP, bypass warning): those are the human's;
  *   6. hand it the brief with `orca orchestration worker-start --terminal`, so Orca wakes you when it reports.
@@ -21,9 +22,10 @@
  * Prints one JSON line: { title, handle, dispatchId, runId, worktree }.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { setup } from "./worktree.mjs";
 
 export const PERMISSION_MODES = ["default", "acceptEdits", "auto", "bypassPermissions", "dontAsk", "plan"];
 // What this script calls, and the help text that shows each still exists. Checked on every launch.
@@ -143,6 +145,11 @@ function main() {
     created = true;
   }
   if (!existsSync(join(wt.path, ".orchestrator.json"))) fail(`${wt.path} has no .orchestrator.json: the guard would not hold the builder there`);
+  // Dependencies before the builder's first command; output goes to stderr, stdout keeps the one JSON line.
+  if (created) {
+    try { setup(wt.path, dirname(mine)); }
+    catch (e) { fail(`the worktree setup failed in ${wt.path}: ${e.message}. Fix it, run \`node <skill dir>/scripts/worktree.mjs setup "${wt.path}"\`, then rerun this command.`); }
+  }
   // A branch: selector could match another project's worktree; the id names this one.
   const selector = `id:${wt.id}`;
 
@@ -170,4 +177,6 @@ function main() {
   console.log(JSON.stringify({ title, handle, dispatchId: r.dispatchId, runId: r.runId, worktree: wt.path }));
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main();
+// Through a symlinked project folder, argv keeps the link while import.meta.url has the real path.
+const realArg = (() => { try { return realpathSync(resolve(process.argv[1] ?? "")); } catch { return null; } })();
+if (realArg && realpathSync(fileURLToPath(import.meta.url)) === realArg) main();

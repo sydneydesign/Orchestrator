@@ -23,6 +23,10 @@
 // A story's state, in this order: discarded → Cancelado; works → Hecho; an open pull request from a branch with its
 // ID → En revisión; a branch with its ID on origin, or partial → En curso; anything else → Por hacer. Each travels
 // as its gg-ez state type and name.
+//
+// A project can decide the state itself: if a story in `stories.mjs --json` brings `reflect`, it wins. An object
+// `{ tipo, estado }` goes as it is (tipo: backlog, unstarted, started, completed or canceled); `null` leaves the
+// story out, and gg-ez cancels its task. A `reflect` with another shape stops the run, naming the story.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
@@ -105,8 +109,39 @@ export function hasId(branch, id) {
   return new RegExp(`(?<![A-Za-z0-9])${escaped}(?![0-9])`).test(branch);
 }
 
-/** The gg-ez state of a story: its type and its name. See the order in the header. */
+/** gg-ez's state types: a `reflect` with any other is refused before sending. */
+const STATE_TYPES = new Set(["backlog", "unstarted", "started", "completed", "canceled"]);
+
+/** Does the story bring its own `reflect` (an object, or null to leave it out)? */
+const ownsReflect = (story) => Object.hasOwn(story, "reflect");
+
+/**
+ * The IDs of the stories whose own `reflect` gg-ez would not take: not null and not { tipo, estado } with a known type
+ * and a name. One of them would reject the whole reflection, or move a task to the wrong column.
+ */
+export function badReflect(stories) {
+  return stories
+    .filter((story) => {
+      if (!ownsReflect(story) || story.reflect === null) return false;
+      const own = story.reflect;
+      return (
+        typeof own !== "object" ||
+        !STATE_TYPES.has(own.tipo) ||
+        typeof own.estado !== "string" ||
+        !own.estado.trim()
+      );
+    })
+    .map((story) => story.id);
+}
+
+/**
+ * The gg-ez state of a story: its type and its name. A story that brings its own `reflect` goes as it says (the
+ * project decides its states, e.g. from its design tags); otherwise, the order in the header.
+ */
 export function pieceState(story, branches, prBranches) {
+  if (ownsReflect(story) && story.reflect !== null) {
+    return { tipo: story.reflect.tipo, estado: story.reflect.estado.trim() };
+  }
   if (story.discarded || story.status === "discarded") return { ...STATES.canceled };
   if (story.status === "works") return { ...STATES.completed };
   if (prBranches.some((branch) => hasId(branch, story.id))) return { ...STATES.review };
@@ -133,7 +168,8 @@ export function reflectionOf({ source, stories, activities, branches, prBranches
   const groups = new Map(activities.map((activity) => [activity.code, activity.name]));
   return {
     origen: source,
-    piezas: stories.map((story) => {
+    // A story with `reflect: null` is left out: gg-ez cancels the task it had, if any.
+    piezas: stories.filter((story) => !(ownsReflect(story) && story.reflect === null)).map((story) => {
       const piece = {
         clave: story.id,
         titulo: titleFor(story.title),
@@ -334,6 +370,10 @@ async function main(argv) {
   if (!stories.length) fail("There are no stories to reflect. Nothing was sent.");
   const withoutTitle = untitled(stories);
   if (withoutTitle.length) fail(`These stories have no title: ${withoutTitle.join(", ")}. Nothing was sent.`);
+  const wrongReflect = badReflect(stories);
+  if (wrongReflect.length) {
+    fail(`These stories bring a reflect gg-ez would not take: ${wrongReflect.join(", ")}. Nothing was sent.`);
+  }
 
   const activitiesFile = path.join(root, storiesDir, "activities.json");
   const activities = existsSync(activitiesFile) ? readJson(activitiesFile, `${storiesDir}/activities.json`) : [];

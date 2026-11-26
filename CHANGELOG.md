@@ -1,7 +1,11 @@
 # Changelog
 
-## 0.14.1 — 2026-11-26
+## 0.15.0 — 2026-11-26
 
+A project can decide each story's gg-ez state itself. easy-one does it from its design tags (`ready/` → Hecho, `lock/` → Pantallas aprobadas), which the plugin's rule cannot know.
+
+- `reflect.mjs`: a story in `stories.mjs --json` that brings `reflect` goes as it says. `{ tipo, estado }` is its state, and `null` leaves it out, so gg-ez cancels its task. Without the field, the rule of 0.14.0 applies. A `reflect` with an unknown type, an empty name or another shape stops the run, naming the stories (`badReflect`). Tests: 17.
+- `skills/stories/templates/reflect-in-gg-ez.yml`: the project's checkout has the whole history and the tags (`fetch-depth: 0`, `fetch-tags: true`). A shallow checkout has neither, and a `reflect` read from tags would come out wrong without failing.
 - `skills/stories/templates/reflect-in-gg-ez.yml`: the tests step runs `stories.mjs --tests --summary --check`. A `stories.mjs` that refuses `--tests` in the main checkout exited with 2 in CI, because a CI checkout is a main checkout. That stopped the first reflection of easy-one before it sent anything. With `--check` it writes no map, and `--summary` still exits first.
 
 ## 0.14.0 — 2026-11-26

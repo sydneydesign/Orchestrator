@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  badReflect,
   childEnv,
   gitHubName,
   hasId,
@@ -79,6 +80,38 @@ describe("reflect: a story becomes a piece", () => {
     for (const status of ["pending", "unverified", "failing", "blocked"]) {
       assert.deepEqual(state(story("ALT-001", status)), { tipo: "unstarted", estado: "Por hacer" }, status);
     }
+  });
+
+  it("a story that brings its own `reflect` goes as it says: an object as its state, null not at all", () => {
+    const reflection = reflectionOf({
+      source: "product",
+      stories: [
+        story("ALT-001", "partial", { reflect: { tipo: "started", estado: "Pantallas aprobadas" } }),
+        story("ALT-002", "works", { reflect: null }),
+        story("ALT-003", "pending"),
+      ],
+      activities: [],
+      branches: ["x/ALT-001"],
+      prBranches: ["x/ALT-001"],
+      repo: null,
+      storiesDir: "producto",
+    });
+    assert.deepEqual(reflection.piezas, [
+      { clave: "ALT-001", titulo: "Title of ALT-001", tipo: "started", estado: "Pantallas aprobadas" },
+      { clave: "ALT-003", titulo: "Title of ALT-003", tipo: "unstarted", estado: "Por hacer" },
+    ]);
+  });
+
+  it("a `reflect` that gg-ez would not take is named, instead of moving tasks by mistake", () => {
+    const stories = [
+      story("ALT-001", "partial", { reflect: { tipo: "started", estado: "Diseñando" } }),
+      story("ALT-002", "partial", { reflect: { tipo: "doing", estado: "Diseñando" } }),
+      story("ALT-003", "partial", { reflect: { tipo: "started", estado: " " } }),
+      story("ALT-004", "partial", { reflect: "started" }),
+      story("ALT-005", "partial", { reflect: null }),
+      story("ALT-006", "partial"),
+    ];
+    assert.deepEqual(badReflect(stories), ["ALT-002", "ALT-003", "ALT-004"]);
   });
 
   it("a branch carries the ID as a whole word, not inside a longer one", () => {

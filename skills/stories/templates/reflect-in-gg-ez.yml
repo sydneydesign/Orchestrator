@@ -34,7 +34,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # The whole history and the tags: a project whose stories.mjs reads them (a `reflect` from its design tags, its
+      # commits) would see none in a shallow checkout.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: sydneydesign/Orchestrator

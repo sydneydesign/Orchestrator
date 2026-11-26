@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.0 — 2026-11-26
+
+A repository's stories can be reflected in gg-ez (REF-002 in gg-ez), so a project's progress shows up on its board without copying anything.
+
+- `skills/stories/scripts/reflect.mjs` reads `stories.mjs --json` and posts each story as a piece of gg-ez's reflection: the ID as the key, the title, the activity as the group, the story file on the default branch as the link, and the state (discarded → Cancelado, works → Hecho, an open PR from a branch with its ID → En revisión, a branch with its ID on origin or partial → En curso, the rest → Por hacer). `--source`, `--tests`, `--dry-run` and `--any-branch`; anything else is refused, so a typo never sends for real. It prints how many pieces went and what gg-ez created, changed and canceled; a rejection exits non-zero with gg-ez's reason.
+- It reflects only the tip of the default branch on origin, with the stories folder clean: from a story branch or a worktree, the next run from the default branch would undo it. `--any-branch` sends anyway.
+- `GGEZ_URL` and `GGEZ_KEY` come only from the environment, are never printed, and no program it runs sees them (git and gh get the environment without them; the project's tests, without the GitHub tokens either). The key goes only over https (http only to this machine), and a redirect is refused rather than followed. A story without a title stops it, naming the story; one longer than gg-ez takes goes cut with an ellipsis, and says so.
+- `skills/stories/templates/reflect-in-gg-ez.yml` runs it after every merge into the default branch and on demand from it, with the plugin and the actions pinned to commits. The project's install and tests run in earlier steps with no secret, since any dependency could read the environment, even a parent's.
+- `scripts/reflect.test.mjs`: the translation, the arguments, the settings and the report, with no network: `node --test "skills/**/*.test.mjs"` (Node 21 or later, for the glob).
+
 ## 0.13.2 — 2026-11-26
 
 The guard stops growing against bypasses. Since 0.9.0 it grew from 411 to 906 lines. Between 0.11.2 and 0.13.1 its cases went from 114 to 301. Most of that work closed bypasses that only reviews found (globs, symlinks, `env -S`, quoting), and each fix revealed more.

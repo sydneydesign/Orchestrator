@@ -5,12 +5,18 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  childEnv,
+  gitHubName,
   hasId,
+  headProblem,
+  parseArgs,
   pieceState,
   readSettings,
   reflectionOf,
   reportOf,
+  stripBom,
   titleFor,
+  untitled,
 } from "./reflect.mjs";
 
 const story = (id, status, extra = {}) => ({
@@ -151,5 +157,67 @@ describe("reflect: what gg-ez answered", () => {
     const otherSource = reportOf(3, 403, { ok: false, error: "Esta llave no es de ese origen" });
     assert.equal(otherSource.ok, false);
     assert.match(otherSource.text, /--source/);
+  });
+});
+
+describe("reflect: arguments", () => {
+  it("knows its options, in both forms, and refuses anything else", () => {
+    const none = { ok: true, source: null, tests: false, dryRun: false, anyBranch: false };
+    assert.deepEqual(parseArgs([]), none);
+    assert.deepEqual(parseArgs(["--source", "easy-one", "--tests", "--dry-run", "--any-branch"]), {
+      ok: true,
+      source: "easy-one",
+      tests: true,
+      dryRun: true,
+      anyBranch: true,
+    });
+    assert.deepEqual(parseArgs(["--source=easy-one"]), { ...none, source: "easy-one" });
+    // A typo must not send for real, and a source without a value must not fall back to the folder.
+    for (const bad of [["--dryrun"], ["--source"], ["--source", "--tests"], ["--source="], ["extra"]]) {
+      assert.equal(parseArgs(bad).ok, false, bad.join(" "));
+    }
+  });
+});
+
+describe("reflect: what reaches other programs", () => {
+  it("the address and the key never reach a child process, and the tests get no GitHub token", () => {
+    const env = { PATH: "p", HOME: "h", GGEZ_URL: "u", GGEZ_KEY: "k", GH_TOKEN: "t", GITHUB_TOKEN: "g" };
+    assert.deepEqual(childEnv(env), { PATH: "p", HOME: "h", GH_TOKEN: "t", GITHUB_TOKEN: "g" });
+    assert.deepEqual(childEnv(env, { forTests: true }), { PATH: "p", HOME: "h" });
+  });
+});
+
+describe("reflect: reading the repository", () => {
+  it("recognises a GitHub remote, and only GitHub", () => {
+    assert.equal(gitHubName("git@github.com:owner/repo.git"), "owner/repo");
+    assert.equal(gitHubName("https://github.com/owner/repo"), "owner/repo");
+    assert.equal(gitHubName("https://someone@github.com/owner/repo.git"), "owner/repo");
+    assert.equal(gitHubName("ssh://git@github.com/owner/repo.git"), "owner/repo");
+    assert.equal(gitHubName("https://evilgithub.com/owner/repo"), null);
+    assert.equal(gitHubName("https://gitlab.com/owner/repo"), null);
+    assert.equal(gitHubName(""), null);
+  });
+
+  it("a BOM at the start of a JSON file is not part of it", () => {
+    assert.deepEqual(JSON.parse(stripBom("﻿[1]")), [1]);
+    assert.equal(stripBom("[1]"), "[1]");
+  });
+
+  it("names the stories without a title, instead of sending them as «undefined»", () => {
+    const stories = [
+      { id: "ALT-001", title: "" },
+      { id: "ALT-002" },
+      { id: "ALT-003", title: "   " },
+      { id: "ALT-004", title: "Ok" },
+    ];
+    assert.deepEqual(untitled(stories), ["ALT-001", "ALT-002", "ALT-003"]);
+  });
+
+  it("reflects only the tip of the default branch, with the stories folder clean", () => {
+    assert.equal(headProblem({ head: "a1", tip: "a1", dirty: false, branch: "main" }), null);
+    assert.match(headProblem({ head: "b2", tip: "a1", dirty: false, branch: "main" }), /tip of origin\/main/);
+    assert.match(headProblem({ head: "a1", tip: "a1", dirty: true, branch: "main" }), /uncommitted/);
+    // Without a tip to compare (no remote branch found), it does not guess.
+    assert.match(headProblem({ head: "a1", tip: null, dirty: false, branch: "main" }), /origin\/main/);
   });
 });

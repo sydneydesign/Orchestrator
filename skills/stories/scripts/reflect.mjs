@@ -14,6 +14,11 @@
 //   --dry-run        print how many pieces would go, by state, and send nothing. Needs no key.
 //   --any-branch     send even when HEAD is not the tip of the default branch on origin, or the stories folder has
 //                    uncommitted changes. The next run from the default branch puts gg-ez back to it.
+//   --design         the state is the story's design phase, read from git (`designState`): ready/ → Hecho,
+//                    lock/ → Pantallas aprobadas, explora/ or a commit in src/ that opens with the ID → Diseñando,
+//                    the rest → Por diseñar. Reads the tags on origin; needs the whole history.
+//   --alias NEW=OLD  with --design, a story's old IDs, comma-separated, count as its own. Repeatable.
+//   --skip CODE      leave out the stories of that activity (gg-ez cancels their tasks). Repeatable.
 //
 // Settings come only from the environment, never from a file or an argument, and neither is printed nor passed to
 // any program it runs (git, gh, the project's tests):
@@ -53,18 +58,44 @@ const TOKENS = ["GH_TOKEN", "GITHUB_TOKEN"];
 
 /** The options, or what is wrong with them. Anything unknown is refused: a typo must not send for real. */
 export function parseArgs(args) {
-  const options = { ok: true, source: null, tests: false, dryRun: false, anyBranch: false };
-  const flags = { "--tests": "tests", "--dry-run": "dryRun", "--any-branch": "anyBranch" };
+  const options = {
+    ok: true,
+    source: null,
+    tests: false,
+    dryRun: false,
+    anyBranch: false,
+    design: false,
+    aliases: new Map(),
+    skip: [],
+  };
+  const flags = { "--tests": "tests", "--dry-run": "dryRun", "--any-branch": "anyBranch", "--design": "design" };
+  const valueOf = (arg, name, at) => (arg === name ? [args[at + 1], at + 1] : [arg.slice(name.length + 1), at]);
   for (let at = 0; at < args.length; at += 1) {
     const arg = args[at];
     if (arg in flags) {
       options[flags[arg]] = true;
     } else if (arg === "--source" || arg.startsWith("--source=")) {
-      const value = arg === "--source" ? args[++at] : arg.slice("--source=".length);
+      const [value, next] = valueOf(arg, "--source", at);
+      at = next;
       if (!value || value.startsWith("--")) return { ok: false, error: "--source needs a name." };
       options.source = value;
+    } else if (arg === "--alias" || arg.startsWith("--alias=")) {
+      const [value, next] = valueOf(arg, "--alias", at);
+      at = next;
+      const match = String(value ?? "").match(/^([^=\s]+)=([^=\s]+)$/);
+      const olds = match ? match[2].split(",").filter(Boolean) : [];
+      if (!match || !olds.length) return { ok: false, error: "--alias needs NEW=OLD or NEW=OLD,OLD." };
+      options.aliases.set(match[1], olds);
+    } else if (arg === "--skip" || arg.startsWith("--skip=")) {
+      const [value, next] = valueOf(arg, "--skip", at);
+      at = next;
+      if (!value || value.startsWith("--")) return { ok: false, error: "--skip needs an activity code." };
+      options.skip.push(value);
     } else {
-      return { ok: false, error: `Unknown argument: ${arg}. Use --source <name>, --tests, --dry-run or --any-branch.` };
+      return {
+        ok: false,
+        error: `Unknown argument: ${arg}. Use --source <name>, --tests, --dry-run, --any-branch, --design, --alias NEW=OLD or --skip CODE.`,
+      };
     }
   }
   return options;
@@ -134,14 +165,44 @@ export function badReflect(stories) {
     .map((story) => story.id);
 }
 
+const DESIGN = {
+  completed: { tipo: "completed", estado: "Hecho" },
+  approved: { tipo: "started", estado: "Pantallas aprobadas" },
+  designing: { tipo: "started", estado: "Diseñando" },
+  todo: { tipo: "unstarted", estado: "Por diseñar" },
+};
+
 /**
- * The gg-ez state of a story: its type and its name. A story that brings its own `reflect` goes as it says (the
- * project decides its states, e.g. from its design tags); otherwise, the order in the header.
+ * The design phase of a story (--design), read from git; the first that matches wins. Discarded → Cancelado; a tag
+ * ready/<ID> or ready/<ID>-N → Hecho; a tag lock/<ID>-… → Pantallas aprobadas; a branch explora/<ID>[-…], or a commit
+ * that touches the code and whose subject or scope opens with the ID ("ALT-007: …", "feat(ALT-008, ALT-009): …") →
+ * Diseñando; the rest → Por diseñar. <ID> is the story's ID or one of its old ones (`aliases`). Pure.
  */
-export function pieceState(story, branches, prBranches) {
+export function designState(story, { tags, branches, subjects, aliases }) {
+  if (story.discarded || story.status === "discarded") return { ...STATES.canceled };
+  const escape = (id) => id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const id = `(?:${[story.id, ...(aliases.get(story.id) ?? [])].map(escape).join("|")})`;
+  const some = (list, pattern) => list.some((item) => pattern.test(item));
+  if (some(tags, new RegExp(`^ready/${id}(?:-\\d+)?$`))) return { ...DESIGN.completed };
+  if (some(tags, new RegExp(`^lock/${id}-`))) return { ...DESIGN.approved };
+  if (
+    some(branches, new RegExp(`^explora/${id}(?:-.*)?$`)) ||
+    some(subjects, new RegExp(`^(?:[\\w-]+\\((?:[A-Z]+-\\d+,\\s*)*)?${id}(?!\\d)`))
+  ) {
+    return { ...DESIGN.designing };
+  }
+  return { ...DESIGN.todo };
+}
+
+/**
+ * The gg-ez state of a story: its type and its name. A story that brings its own `reflect` goes as it says; with
+ * `design` (--design), its design phase; otherwise, the order in the header.
+ */
+export function pieceState(story, branches, prBranches, design = null) {
   if (ownsReflect(story) && story.reflect !== null) {
     return { tipo: story.reflect.tipo, estado: story.reflect.estado.trim() };
   }
+  if (design) return designState(story, design);
   if (story.discarded || story.status === "discarded") return { ...STATES.canceled };
   if (story.status === "works") return { ...STATES.completed };
   if (prBranches.some((branch) => hasId(branch, story.id))) return { ...STATES.review };
@@ -164,16 +225,27 @@ export function titleFor(title) {
 }
 
 /** The reflection to send: the source and one piece per story. Pure: everything it needs comes in. */
-export function reflectionOf({ source, stories, activities, branches, prBranches, repo, storiesDir }) {
+export function reflectionOf({
+  source,
+  stories,
+  activities,
+  branches,
+  prBranches,
+  repo,
+  storiesDir,
+  design = null,
+  skip = [],
+}) {
   const groups = new Map(activities.map((activity) => [activity.code, activity.name]));
+  // Left out, so gg-ez cancels the task they had: a story with `reflect: null`, and an activity in --skip.
+  const leftOut = (story) => (ownsReflect(story) && story.reflect === null) || skip.includes(story.code);
   return {
     origen: source,
-    // A story with `reflect: null` is left out: gg-ez cancels the task it had, if any.
-    piezas: stories.filter((story) => !(ownsReflect(story) && story.reflect === null)).map((story) => {
+    piezas: stories.filter((story) => !leftOut(story)).map((story) => {
       const piece = {
         clave: story.id,
         titulo: titleFor(story.title),
-        ...pieceState(story, branches, prBranches),
+        ...pieceState(story, branches, prBranches, design),
       };
       if (repo) {
         const file = [storiesDir, story.file].join("/").split("/").map(encodeURIComponent).join("/");
@@ -338,6 +410,27 @@ async function main(argv) {
     if (problem) console.warn(`${problem} Sending anyway (--any-branch).`);
   }
 
+  // --design reads the design phase from git: the tags on origin, and the subjects of the commits that touch src/.
+  let design = null;
+  if (options.design) {
+    if (!remote) fail("--design reads the tags on origin, and this repository has no origin. Nothing was sent.");
+    try {
+      if (run("git", ["rev-parse", "--is-shallow-repository"], { cwd: root }) === "true") {
+        fail("--design needs the whole history, and this checkout is shallow (fetch-depth: 0). Nothing was sent.");
+      }
+      const tags = run("git", ["ls-remote", "--tags", "origin"], { cwd: root })
+        .split("\n")
+        .map((line) => line.split("\trefs/tags/")[1])
+        .filter((tag) => tag && !tag.endsWith("^{}"));
+      const subjects = run("git", ["log", "--format=%s", "HEAD", "--", "src/"], { cwd: root })
+        .split("\n")
+        .filter(Boolean);
+      design = { tags, branches, subjects, aliases: options.aliases };
+    } catch {
+      fail("git could not read the tags or the history, so the design phases would be wrong. Nothing was sent.");
+    }
+  }
+
   if (options.tests) {
     try {
       execFileSync(process.execPath, [script, "--tests", "--summary"], {
@@ -386,6 +479,8 @@ async function main(argv) {
     prBranches,
     repo,
     storiesDir,
+    design,
+    skip: options.skip,
   });
   for (const story of stories) {
     if (titleFor(story.title) !== story.title.replace(/\r\n|\r|\n/g, " ").trim()) {

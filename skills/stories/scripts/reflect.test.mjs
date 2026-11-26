@@ -7,6 +7,7 @@ import { describe, it } from "node:test";
 import {
   badReflect,
   childEnv,
+  designState,
   gitHubName,
   hasId,
   headProblem,
@@ -114,6 +115,65 @@ describe("reflect: a story becomes a piece", () => {
     assert.deepEqual(badReflect(stories), ["ALT-002", "ALT-003", "ALT-004"]);
   });
 
+  it("with --design the state is the design phase, read from git: ready/, lock/, explora/ or a commit, the rest", () => {
+    const git = {
+      tags: ["ready/ALT-001", "ready/ALT-002-2", "lock/ALT-003-alta", "lock/ALT-010-x", "ready/ALT-0011", "archivo/ready-ALT-004"],
+      branches: ["explora/ALT-005", "explora/ALT-006-humo", "explora/ALT-0077"],
+      subjects: ["ALT-007: the screen", "feat(ALT-008, ALT-009): two at once", "chore: base, with ALT-012 named inside"],
+      aliases: new Map([["ACC-001", ["ALT-010"]]]),
+    };
+    const phase = (id, status = "pending") => designState(story(id, status), git);
+    assert.deepEqual(phase("ALT-001"), { tipo: "completed", estado: "Hecho" });
+    assert.deepEqual(phase("ALT-002"), { tipo: "completed", estado: "Hecho" });
+    assert.deepEqual(phase("ALT-003", "works"), { tipo: "started", estado: "Pantallas aprobadas" });
+    assert.deepEqual(phase("ACC-001"), { tipo: "started", estado: "Pantallas aprobadas" }, "an old ID counts as its own");
+    assert.deepEqual(phase("ALT-005"), { tipo: "started", estado: "Diseñando" });
+    assert.deepEqual(phase("ALT-006"), { tipo: "started", estado: "Diseñando" });
+    assert.deepEqual(phase("ALT-007"), { tipo: "started", estado: "Diseñando" });
+    assert.deepEqual(phase("ALT-009"), { tipo: "started", estado: "Diseñando" }, "inside a list of scopes");
+    assert.deepEqual(phase("ALT-012", "partial"), { tipo: "unstarted", estado: "Por diseñar" }, "named, not opening the subject");
+    assert.deepEqual(phase("ALT-004"), { tipo: "unstarted", estado: "Por diseñar" }, "an archived ready does not count");
+    assert.deepEqual(phase("ALT-001", "discarded"), { tipo: "canceled", estado: "Cancelado" });
+    // The ID as a whole word: ALT-0011 and ALT-0077 belong to other stories.
+    assert.deepEqual(designState(story("ALT-001", "pending"), { ...git, tags: ["ready/ALT-0011"] }), {
+      tipo: "unstarted",
+      estado: "Por diseñar",
+    });
+  });
+
+  it("--skip leaves out an activity's stories, and a story's own reflect still wins over --design", () => {
+    const design = { tags: ["ready/ALT-001", "ready/DEM-001"], branches: [], subjects: [], aliases: new Map() };
+    const reflection = reflectionOf({
+      source: "product",
+      stories: [
+        story("ALT-001", "partial"),
+        story("ALT-002", "pending", { reflect: { tipo: "started", estado: "Otra" } }),
+        story("DEM-001", "works"),
+      ],
+      activities: [],
+      branches: [],
+      prBranches: [],
+      repo: null,
+      storiesDir: "producto",
+      design,
+      skip: ["DEM"],
+    });
+    assert.deepEqual(reflection.piezas, [
+      { clave: "ALT-001", titulo: "Title of ALT-001", tipo: "completed", estado: "Hecho" },
+      { clave: "ALT-002", titulo: "Title of ALT-002", tipo: "started", estado: "Otra" },
+    ]);
+  });
+
+  it("knows --design, --alias NEW=OLD,OLD and --skip CODE, repeated, and refuses a broken alias", () => {
+    const options = parseArgs(["--design", "--alias", "ACC-001=ALT-004", "--alias=ACC-002=ALT-004,NAV-002", "--skip", "DEM"]);
+    assert.equal(options.ok, true);
+    assert.equal(options.design, true);
+    assert.deepEqual([...options.aliases], [["ACC-001", ["ALT-004"]], ["ACC-002", ["ALT-004", "NAV-002"]]]);
+    assert.deepEqual(options.skip, ["DEM"]);
+    assert.equal(parseArgs(["--alias", "ACC-001"]).ok, false);
+    assert.equal(parseArgs(["--skip"]).ok, false);
+  });
+
   it("a branch carries the ID as a whole word, not inside a longer one", () => {
     assert.equal(hasId("sydney/ALT-001-smoke", "ALT-001"), true);
     assert.equal(hasId("explore/ALT-001", "ALT-001"), true);
@@ -195,10 +255,19 @@ describe("reflect: what gg-ez answered", () => {
 
 describe("reflect: arguments", () => {
   it("knows its options, in both forms, and refuses anything else", () => {
-    const none = { ok: true, source: null, tests: false, dryRun: false, anyBranch: false };
+    const none = {
+      ok: true,
+      source: null,
+      tests: false,
+      dryRun: false,
+      anyBranch: false,
+      design: false,
+      aliases: new Map(),
+      skip: [],
+    };
     assert.deepEqual(parseArgs([]), none);
     assert.deepEqual(parseArgs(["--source", "easy-one", "--tests", "--dry-run", "--any-branch"]), {
-      ok: true,
+      ...none,
       source: "easy-one",
       tests: true,
       dryRun: true,

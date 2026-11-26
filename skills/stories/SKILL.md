@@ -110,3 +110,14 @@ Never split by layer ("API for…", "database for…", "front end of…"). A lay
 Things the validator cannot see. Check them yourself when you write or edit a story:
 - A solution in the want: button, modal, endpoint, table. Test: would the wording change if the implementation changed?
 - The Definition of Done leaking into criteria ("tests written", "code reviewed").
+
+## Reflecting the stories in gg-ez
+
+`scripts/reflect.mjs` sends the stories to a gg-ez project as a reflection: each story becomes a task there, found again by its ID, and gg-ez creates, changes and cancels tasks to match. The state comes from the story's status and from git: discarded → Cancelado, works → Hecho, an open PR from a branch with its ID → En revisión, a branch with its ID on origin or partial → En curso, anything else → Por hacer. The activity travels as the group, and the story file on the default branch as the link.
+
+- Run it with `--dry-run` first: it prints the pieces by state and sends nothing.
+- `GGEZ_URL` and `GGEZ_KEY` come from the environment, never from a file or an argument. The key is generated in gg-ez, once, by an admin of the project.
+- The source is the repository's folder name, or `--source <name>`. It must match the key's source, or gg-ez rejects the reflection.
+- `--tests` runs the project's tests first, so each state matches the map. Without it, the last saved results count.
+- A validator error, a missing `gh` on a GitHub repository, or gg-ez's rejection stops it before anything changes, and says why.
+- `templates/reflect-in-gg-ez.yml` runs it from GitHub Actions after every merge into main.

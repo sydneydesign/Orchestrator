@@ -155,6 +155,16 @@ node <storiesDir>/stories.mjs --pr ID      print the pull-request checklist for 
 
 A bug is never a new story: it is a failing marker on the criterion it breaks. A decision that blocks stories (a provider, pricing, hosting) lives in `decisions/` and is closed only by the human.
 
+### Reflect the stories in gg-ez
+
+A repository's stories can show up in a [gg-ez](https://github.com/SergioHyliacom/gg-ez) project as tasks, kept up to date: each story is a task, its ID the key, its activity the group, and its state follows the story (discarded → Cancelado, works → Hecho, an open PR from a branch with its ID → En revisión, a branch with its ID or partial → En curso, the rest → Por hacer). The command reads `stories.mjs --json`, asks git and `gh` for branches and PRs, and posts it with the project's key:
+
+```
+GGEZ_URL=https://… GGEZ_KEY=ggez_… node <plugin>/skills/stories/scripts/reflect.mjs [--source <name>] [--tests] [--dry-run]
+```
+
+The address and the key come only from the environment and are never printed. To run it after every merge into main, copy `skills/stories/templates/reflect-in-gg-ez.yml` to `.github/workflows/` and add `GGEZ_URL` and `GGEZ_KEY` as repository secrets.
+
 ## Configuration
 
 `.orchestrator.json`, written by the install:
@@ -231,7 +241,7 @@ These are a starting set. The orchestrator creates a project role when a job nee
 | Path | Contents |
 |---|---|
 | `skills/orchestrate/` | The orchestrator's operating procedure, with references for the harness, git and roles, `scripts/tidy.mjs` for the close, `scripts/launch.mjs` to run a builder in an Orca terminal, `scripts/worktree.mjs` to set up and remove worktrees, and `scripts/pr-assets.mjs` and `scripts/watch-pr.mjs` for pull requests |
-| `skills/stories/` | How to write, split and maintain stories, with templates |
+| `skills/stories/` | How to write, split and maintain stories, with templates, and `scripts/reflect.mjs`, which reflects them in gg-ez (its tests: `node --test "skills/**/*.test.mjs"`) |
 | `skills/install/` | The project setup, and the assets it copies |
 | `agents/` | The shipped role contracts |
 | `hooks/` | The guard, and `check-guard.mjs`, its cases: run `node hooks/check-guard.mjs` after changing it |

@@ -1,0 +1,51 @@
+# Reflect this repository's stories in gg-ez after every merge into main, and on demand (Actions › Run workflow).
+# Copy it to .github/workflows/ in the repository whose stories you reflect.
+#
+# It needs two repository secrets (Settings › Secrets and variables › Actions):
+#   GGEZ_URL  gg-ez's address, https.
+#   GGEZ_KEY  the project's reflection key, generated once in gg-ez under Settings › Projects › <project>.
+# On a personal repository only its owner can add them.
+#
+# The key reaches the plugin's code, so that code is pinned to a commit, as are the actions. Move `ref` to a newer
+# commit of the plugin on purpose, never to a branch.
+# If the source in gg-ez is not the repository's name, add `--source <name>` to the last step.
+# `npm ci` is there so `--tests` can run the project's tests: change it to the project's own install.
+
+name: Reflect in gg-ez
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: reflect-in-gg-ez
+  cancel-in-progress: false
+
+jobs:
+  reflect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: sydneydesign/Orchestrator
+          ref: bf7367957be52ec190054517f29910843b16346e
+          path: .orchestrator-plugin
+          persist-credentials: false
+      # Out of the project's folder, so its test runner does not pick up the plugin's tests.
+      - run: mv .orchestrator-plugin "$RUNNER_TEMP/orchestrator-plugin"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: node "$RUNNER_TEMP/orchestrator-plugin/skills/stories/scripts/reflect.mjs" --tests
+        env:
+          GGEZ_URL: ${{ secrets.GGEZ_URL }}
+          GGEZ_KEY: ${{ secrets.GGEZ_KEY }}
+          GH_TOKEN: ${{ github.token }}

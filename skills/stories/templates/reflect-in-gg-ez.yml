@@ -49,7 +49,8 @@ jobs:
       # Adjust: the project's own install.
       - run: npm ci
       # Adjust: <storiesDir>/stories.mjs. The tests run here, with no secret; their results stay for the next step.
-      - run: node product/stories.mjs --tests --summary
+      # --check: a stories.mjs that refuses `--tests` in the main checkout (a CI checkout is one) runs with it.
+      - run: node product/stories.mjs --tests --summary --check
       - run: node "$RUNNER_TEMP/orchestrator-plugin/skills/stories/scripts/reflect.mjs"
         env:
           GGEZ_URL: ${{ secrets.GGEZ_URL }}

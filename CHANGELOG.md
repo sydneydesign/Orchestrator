@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.1 — 2026-11-26
+
+- `skills/stories/templates/reflect-in-gg-ez.yml`: the tests step runs `stories.mjs --tests --summary --check`. A `stories.mjs` that refuses `--tests` in the main checkout exited with 2 in CI, because a CI checkout is a main checkout. That stopped the first reflection of easy-one before it sent anything. With `--check` it writes no map, and `--summary` still exits first.
+
 ## 0.14.0 — 2026-11-26
 
 A repository's stories can be reflected in gg-ez (REF-002 in gg-ez), so a project's progress shows up on its board without copying anything.

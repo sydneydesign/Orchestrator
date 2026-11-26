@@ -14,6 +14,11 @@
 //   --dry-run        print how many pieces would go, by state, and send nothing. Needs no key.
 //   --any-branch     send even when HEAD is not the tip of the default branch on origin, or the stories folder has
 //                    uncommitted changes. The next run from the default branch puts gg-ez back to it.
+//   --design         the state is the story's design phase, read from git (`designState`): ready/ → Hecho,
+//                    lock/ → Pantallas aprobadas, explora/ or a commit in src/ that opens with the ID → Diseñando,
+//                    the rest → Por diseñar. Reads the tags on origin; needs the whole history.
+//   --alias NEW=OLD  with --design, a story's old IDs, comma-separated, count as its own. Repeatable.
+//   --skip CODE      leave out the stories of that activity (gg-ez cancels their tasks). Repeatable.
 //
 // Settings come only from the environment, never from a file or an argument, and neither is printed nor passed to
 // any program it runs (git, gh, the project's tests):
@@ -23,6 +28,10 @@
 // A story's state, in this order: discarded → Cancelado; works → Hecho; an open pull request from a branch with its
 // ID → En revisión; a branch with its ID on origin, or partial → En curso; anything else → Por hacer. Each travels
 // as its gg-ez state type and name.
+//
+// A project can decide the state itself: if a story in `stories.mjs --json` brings `reflect`, it wins. An object
+// `{ tipo, estado }` goes as it is (tipo: backlog, unstarted, started, completed or canceled); `null` leaves the
+// story out, and gg-ez cancels its task. A `reflect` with another shape stops the run, naming the story.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
@@ -49,18 +58,47 @@ const TOKENS = ["GH_TOKEN", "GITHUB_TOKEN"];
 
 /** The options, or what is wrong with them. Anything unknown is refused: a typo must not send for real. */
 export function parseArgs(args) {
-  const options = { ok: true, source: null, tests: false, dryRun: false, anyBranch: false };
-  const flags = { "--tests": "tests", "--dry-run": "dryRun", "--any-branch": "anyBranch" };
+  const options = {
+    ok: true,
+    source: null,
+    tests: false,
+    dryRun: false,
+    anyBranch: false,
+    design: false,
+    aliases: new Map(),
+    skip: [],
+  };
+  const flags = { "--tests": "tests", "--dry-run": "dryRun", "--any-branch": "anyBranch", "--design": "design" };
+  const valueOf = (arg, name, at) => (arg === name ? [args[at + 1], at + 1] : [arg.slice(name.length + 1), at]);
   for (let at = 0; at < args.length; at += 1) {
     const arg = args[at];
     if (arg in flags) {
       options[flags[arg]] = true;
     } else if (arg === "--source" || arg.startsWith("--source=")) {
-      const value = arg === "--source" ? args[++at] : arg.slice("--source=".length);
+      const [value, next] = valueOf(arg, "--source", at);
+      at = next;
       if (!value || value.startsWith("--")) return { ok: false, error: "--source needs a name." };
       options.source = value;
+    } else if (arg === "--alias" || arg.startsWith("--alias=")) {
+      const [value, next] = valueOf(arg, "--alias", at);
+      at = next;
+      const match = String(value ?? "").match(/^([^=\s]+)=([^=\s]+)$/);
+      const olds = match ? match[2].split(",").filter(Boolean) : [];
+      if (!match || !olds.length) return { ok: false, error: "--alias needs NEW=OLD or NEW=OLD,OLD." };
+      if (options.aliases.has(match[1])) {
+        return { ok: false, error: `--alias ${match[1]} comes twice: put all its old IDs in one, comma-separated.` };
+      }
+      options.aliases.set(match[1], olds);
+    } else if (arg === "--skip" || arg.startsWith("--skip=")) {
+      const [value, next] = valueOf(arg, "--skip", at);
+      at = next;
+      if (!value || value.startsWith("--")) return { ok: false, error: "--skip needs an activity code." };
+      options.skip.push(value);
     } else {
-      return { ok: false, error: `Unknown argument: ${arg}. Use --source <name>, --tests, --dry-run or --any-branch.` };
+      return {
+        ok: false,
+        error: `Unknown argument: ${arg}. Use --source <name>, --tests, --dry-run, --any-branch, --design, --alias NEW=OLD or --skip CODE.`,
+      };
     }
   }
   return options;
@@ -105,8 +143,84 @@ export function hasId(branch, id) {
   return new RegExp(`(?<![A-Za-z0-9])${escaped}(?![0-9])`).test(branch);
 }
 
-/** The gg-ez state of a story: its type and its name. See the order in the header. */
-export function pieceState(story, branches, prBranches) {
+/** gg-ez's state types: a `reflect` with any other is refused before sending. */
+const STATE_TYPES = new Set(["backlog", "unstarted", "started", "completed", "canceled"]);
+
+/** Does the story bring its own `reflect` (an object, or null to leave it out)? */
+const ownsReflect = (story) => Object.hasOwn(story, "reflect");
+
+/**
+ * The IDs of the stories whose own `reflect` gg-ez would not take: not null and not { tipo, estado } with a known type
+ * and a name. One of them would reject the whole reflection, or move a task to the wrong column.
+ */
+export function badReflect(stories) {
+  return stories
+    .filter((story) => {
+      if (!ownsReflect(story) || story.reflect === null) return false;
+      const own = story.reflect;
+      return (
+        typeof own !== "object" ||
+        !STATE_TYPES.has(own.tipo) ||
+        typeof own.estado !== "string" ||
+        !own.estado.trim()
+      );
+    })
+    .map((story) => story.id);
+}
+
+/**
+ * What is wrong with --skip and --alias for these stories: a code or a story that matches nothing (a typo would
+ * send DEM to the board, or drop a story to Por diseñar), and an alias without --design, where it does nothing.
+ */
+export function optionProblems(stories, { skip, aliases, design }) {
+  const codes = new Set(stories.map((story) => story.code));
+  const ids = new Set(stories.map((story) => story.id));
+  const problems = [];
+  for (const code of skip) if (!codes.has(code)) problems.push(`--skip ${code} matches no activity`);
+  if (aliases.size && !design) problems.push("--alias only counts with --design");
+  else for (const id of aliases.keys()) if (!ids.has(id)) problems.push(`--alias ${id} matches no story`);
+  return problems;
+}
+
+const DESIGN = {
+  completed: { tipo: "completed", estado: "Hecho" },
+  approved: { tipo: "started", estado: "Pantallas aprobadas" },
+  designing: { tipo: "started", estado: "Diseñando" },
+  todo: { tipo: "unstarted", estado: "Por diseñar" },
+};
+
+/**
+ * The design phase of a story (--design), read from git; the first that matches wins. Discarded → Cancelado; a tag
+ * ready/<ID> or ready/<ID>-N → Hecho; a tag lock/<ID>-… → Pantallas aprobadas; a branch explora/<ID>[-…], or a commit
+ * that touches the code and whose subject or scope opens with the ID ("ALT-007: …", "feat(ALT-008, ALT-009): …") →
+ * Diseñando; the rest → Por diseñar. <ID> is the story's ID or one of its old ones (`aliases`). Pure.
+ */
+export function designState(story, { tags, branches, subjects, aliases }) {
+  if (story.discarded || story.status === "discarded") return { ...STATES.canceled };
+  const escape = (id) => id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const id = `(?:${[story.id, ...(aliases.get(story.id) ?? [])].map(escape).join("|")})`;
+  const some = (list, pattern) => list.some((item) => pattern.test(item));
+  if (some(tags, new RegExp(`^ready/${id}(?:-\\d+)?$`))) return { ...DESIGN.completed };
+  if (some(tags, new RegExp(`^lock/${id}-`))) return { ...DESIGN.approved };
+  if (
+    some(branches, new RegExp(`^explora/${id}(?:-.*)?$`)) ||
+    // The ID opens the subject ("ALT-007: …") or is one item of its scope ("feat(ui, ALT-008): …"), and ends there.
+    some(subjects, new RegExp(`^(?:[\\w-]+\\((?:[^()]*?,\\s*)?)?${id}(?![A-Za-z0-9])`))
+  ) {
+    return { ...DESIGN.designing };
+  }
+  return { ...DESIGN.todo };
+}
+
+/**
+ * The gg-ez state of a story: its type and its name. A story that brings its own `reflect` goes as it says; with
+ * `design` (--design), its design phase; otherwise, the order in the header.
+ */
+export function pieceState(story, branches, prBranches, design = null) {
+  if (ownsReflect(story) && story.reflect !== null) {
+    return { tipo: story.reflect.tipo, estado: story.reflect.estado.trim() };
+  }
+  if (design) return designState(story, design);
   if (story.discarded || story.status === "discarded") return { ...STATES.canceled };
   if (story.status === "works") return { ...STATES.completed };
   if (prBranches.some((branch) => hasId(branch, story.id))) return { ...STATES.review };
@@ -129,15 +243,27 @@ export function titleFor(title) {
 }
 
 /** The reflection to send: the source and one piece per story. Pure: everything it needs comes in. */
-export function reflectionOf({ source, stories, activities, branches, prBranches, repo, storiesDir }) {
+export function reflectionOf({
+  source,
+  stories,
+  activities,
+  branches,
+  prBranches,
+  repo,
+  storiesDir,
+  design = null,
+  skip = [],
+}) {
   const groups = new Map(activities.map((activity) => [activity.code, activity.name]));
+  // Left out, so gg-ez cancels the task they had: a story with `reflect: null`, and an activity in --skip.
+  const leftOut = (story) => (ownsReflect(story) && story.reflect === null) || skip.includes(story.code);
   return {
     origen: source,
-    piezas: stories.map((story) => {
+    piezas: stories.filter((story) => !leftOut(story)).map((story) => {
       const piece = {
         clave: story.id,
         titulo: titleFor(story.title),
-        ...pieceState(story, branches, prBranches),
+        ...pieceState(story, branches, prBranches, design),
       };
       if (repo) {
         const file = [storiesDir, story.file].join("/").split("/").map(encodeURIComponent).join("/");
@@ -302,6 +428,27 @@ async function main(argv) {
     if (problem) console.warn(`${problem} Sending anyway (--any-branch).`);
   }
 
+  // --design reads the design phase from git: the tags on origin, and the subjects of the commits that touch src/.
+  let design = null;
+  if (options.design) {
+    if (!remote) fail("--design reads the tags on origin, and this repository has no origin. Nothing was sent.");
+    try {
+      if (run("git", ["rev-parse", "--is-shallow-repository"], { cwd: root }) === "true") {
+        fail("--design needs the whole history, and this checkout is shallow (fetch-depth: 0). Nothing was sent.");
+      }
+      const tags = run("git", ["ls-remote", "--tags", "origin"], { cwd: root })
+        .split("\n")
+        .map((line) => line.split("\trefs/tags/")[1])
+        .filter((tag) => tag && !tag.endsWith("^{}"));
+      const subjects = run("git", ["log", "--format=%s", "HEAD", "--", "src/"], { cwd: root })
+        .split("\n")
+        .filter(Boolean);
+      design = { tags, branches, subjects, aliases: options.aliases };
+    } catch {
+      fail("git could not read the tags or the history, so the design phases would be wrong. Nothing was sent.");
+    }
+  }
+
   if (options.tests) {
     try {
       execFileSync(process.execPath, [script, "--tests", "--summary"], {
@@ -334,6 +481,12 @@ async function main(argv) {
   if (!stories.length) fail("There are no stories to reflect. Nothing was sent.");
   const withoutTitle = untitled(stories);
   if (withoutTitle.length) fail(`These stories have no title: ${withoutTitle.join(", ")}. Nothing was sent.`);
+  const wrongOptions = optionProblems(stories, options);
+  if (wrongOptions.length) fail(`${wrongOptions.join("; ")}. Nothing was sent.`);
+  const wrongReflect = badReflect(stories);
+  if (wrongReflect.length) {
+    fail(`These stories bring a reflect gg-ez would not take: ${wrongReflect.join(", ")}. Nothing was sent.`);
+  }
 
   const activitiesFile = path.join(root, storiesDir, "activities.json");
   const activities = existsSync(activitiesFile) ? readJson(activitiesFile, `${storiesDir}/activities.json`) : [];
@@ -346,6 +499,8 @@ async function main(argv) {
     prBranches,
     repo,
     storiesDir,
+    design,
+    skip: options.skip,
   });
   for (const story of stories) {
     if (titleFor(story.title) !== story.title.replace(/\r\n|\r|\n/g, " ").trim()) {

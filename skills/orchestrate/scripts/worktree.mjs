@@ -23,7 +23,7 @@
  * .claude/settings.json, only when .orchestrator.json has a worktree key.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { constants, cpSync, existsSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { constants, cpSync, existsSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -115,6 +115,8 @@ export function setup(worktree, main, config = worktreeConfig(worktree, main)) {
   }
   if (copied.length) log(`copied ${copied.length} ignored path(s) from the main checkout: ${copied.slice(0, 5).join(", ")}${copied.length > 5 ? ", ..." : ""}`);
   runCommands(config.setup, worktree, envFor(worktree, main));
+  // The guard's session start reads this to tell a worker in a worktree opened by hand (Orca) to run setup.
+  try { writeFileSync(path.join(path.resolve(worktree, git(worktree, ["rev-parse", "--git-dir"]).trim()), "orchestrator-setup"), new Date().toISOString()); } catch {}
 }
 
 export function teardown(worktree, main, config = worktreeConfig(worktree, main)) {

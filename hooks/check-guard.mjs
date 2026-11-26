@@ -3,13 +3,12 @@
 // story branch, each with a locked test) and compares the exit code and message. Run it after every
 // guard change. Cases tagged PowerShell use that tool's payload; they run on any system.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 const G = path.resolve(process.argv[2] ?? path.join(path.dirname(fileURLToPath(import.meta.url)), "guard.mjs"));
-// realpath: on macOS the temp folder is reached through the /var -> /private/var link, and the guard
-// does not yet match a locked file when the session folder is a symlink to the repository (0.11.3).
+// realpath: on macOS the temp folder is reached through the /var -> /private/var link.
 const base = realpathSync(mkdtempSync(path.join(os.tmpdir(), "check-guard-")));
 const repo = (branch) => {
   const d = path.join(base, branch.replace(/\W/g, "_"));
@@ -27,10 +26,17 @@ const dirs = { main: repo("main"), "story/x": repo("story/x") };
 // checkout that a session moved off main.
 dirs.worktree = path.join(base, "linked");
 execFileSync("git", ["worktree", "add", "-q", dirs.worktree, "-b", "sydneydesign/mail"], { cwd: dirs.main, stdio: "ignore" });
+// The main checkout declares a worktree setup, so a worker in a worktree nobody set up is told to run it.
+writeFileSync(path.join(dirs.main, ".orchestrator.json"), JSON.stringify({ git: { protectedBranches: ["main"] }, worktree: { setup: ["true"] } }));
+writeFileSync(path.join(dirs.main, ".orchestrator", "worktree.mjs"), "// fixture\n");
 dirs.moved = repo("moved");
 execFileSync("git", ["switch", "-q", "-c", "explora/x"], { cwd: dirs.moved, stdio: "ignore" });
 // A branch that exists only on a remote: git checkout <name> would create it and switch.
 execFileSync("git", ["update-ref", "refs/remotes/origin/pr-branch", "HEAD"], { cwd: dirs.main, stdio: "ignore" });
+// A repository whose tests folder is a symlink, with the locked test listed by the link's path.
+dirs.linkedTests = repo("linkedtests");
+{ const d = dirs.linkedTests; mkdirSync(path.join(d, "real"), { recursive: true }); execFileSync("git", ["mv", "tests", "real/tests"], { cwd: d, stdio: "ignore" });
+  try { symlinkSync(path.join("real", "tests"), path.join(d, "tests")); dirs.linkedTestsOk = true; } catch { dirs.linkedTestsOk = false; } }
 // story/y has a commit of its own, so resetting main onto it moves main.
 for (const a of [["switch", "-q", "-c", "story/y"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "y"], ["switch", "-q", "main"]])
   execFileSync("git", a, { cwd: dirs.main, stdio: "ignore" });
@@ -290,24 +296,84 @@ const cases = [
   ["main","builder: fetch with a glob onto refs/heads is blocked","git fetch origin '+refs/heads/*:refs/heads/*'","orchestrator:builder",2,"never move a protected branch"],
   ["worktree","worker: switch -C main in its worktree is blocked","git switch -C main story/y --ignore-other-worktrees","",2,"","Bash","w-c2"],
   ["worktree","worker: committing in a moved main checkout is blocked","MOVEDCOMMIT","",2,"never changes the main checkout","Bash","w-c3"],
+  ["main","designer: a python heredoc with a quoted > passes","python3 - <<'EOF'\nprint(\"<p>{a}: b</p>\")\nEOF","orchestrator:designer",0,""],
+  ["story/x","a python heredoc that runs git push --force asks","python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['git','push','--force'])\nEOF","",0,"\"ask\""],
+  ["main","researcher: a loop variable in a target is blocked (write the full path)","LOOPTMP","orchestrator:researcher",2,"write the full path"],
+  ["main","researcher: a loop over a path list is still blocked","LOOPCLIMB","orchestrator:researcher",2,"write the full path"],
+  ["main","known false block: a quoted folder glued to a glob is read as two words","GLUEDGLOB","orchestrator:designer",2,""],
+  ["main","a session in a symlinked folder still protects locked tests","rm tests/a.test.js","",2,"locked","Bash","symlinked"],
+  ["worktree","a worker in a worktree nobody set up is told to run setup","","",0,"has not been set up","SessionStart:startup","w-setup"],
+  ["main","researcher: ${z:-..} in a target is blocked","TPL1","orchestrator:researcher",2,"read-only"],
+  ["main","researcher: $1 in a target is blocked","TPL2","orchestrator:researcher",2,"read-only"],
+  ["main","researcher: a loop name reassigned in the body is blocked","TPL3","orchestrator:researcher",2,"read-only"],
+  ["story/x","env -S glued with HUSKY=0 is blocked","env -S\"HUSKY=0 git commit -m x\"","",2,"HUSKY"],
+  ["main","env -S glued with a locked test is blocked","env -S\"rm tests/a.test.js\"","",2,"locked"],
+  ["main","PS: cmd /c glued is checked","cmd /c\"git push --force\"","",2,"force push","PowerShell"],
+  ["main","Write through a symlinked folder to a locked test is blocked","LINKWRITE","",2,"locked","Write","symlinked"],
+  ["linkedTests","rm through a symlinked tests folder is blocked","rm tests/a.test.js","",2,"locked"],
+  ["story/x","a python heredoc inside $( ) is still checked","x=$(python3 - <<EOF\nimport os\nos.system(\"git push --force\")\nEOF\n)","",2,"force push"],
+  ["main","researcher: mapfile can set a loop name: blocked","TPL4","orchestrator:researcher",2,"read-only"],
+  ["main","researcher: a loop word naming a link into the repo is blocked","TPL5","orchestrator:researcher",2,"read-only"],
+  ["main","node heredoc running $( ) on a locked test is blocked","node - <<EOF\n$(rm tests/a.test.js)\nEOF","",2,"locked"],
+  ["main","a node heredoc body is read as shell","node - <<'EOF'\nconsole.log(`$(rm tests/a.test.js)`)\nEOF","",2,"locked"],
+  ["main","rm \"tests/\"* is blocked","rm \"tests/\"*","",2,"locked"],
+  ["main","rm tests/* is blocked","rm tests/*","",2,"locked"],
+  ["main","rm tests/{a,b}.test.js is blocked","rm tests/{a,b}.test.js","",2,"locked"],
+  ["main","known gap: bash -c with a script in glued pieces is checked by its first piece","bash -c \"git push \"'--force'","",0,""],
+  ["main","researcher: select can set a loop name: blocked","TPL6","orchestrator:researcher",2,"read-only"],
+  ["main","a session in a symlinked folder: cd .. then rm through the link is blocked","cd .. && rm link-main/tests/a.test.js","",2,"locked","Bash","symlinked"],
+  ["main","an unmatched [ does not crash the guard","rm x[ tests/a.test.js","",2,"locked"],
+  ["main","rm tests/[!b].test.js is blocked","rm tests/[!b].test.js","",2,"locked"],
+  ["main","rm tests/{a..b}.test.js is blocked","rm tests/{a..b}.test.js","",2,"locked"],
+  ["linkedTests","rm through the real path of a symlinked tests folder is blocked","rm real/tests/a.test.js","",2,"locked"],
+  ["linkedTests","Write through the real path of a symlinked tests folder is blocked","real/tests/a.test.js","",2,"locked","Write"],
+  ["main","known gap: env -S with glued pieces is checked by its first piece","env -S\"git push \"'--force'","",0,""],
+  ["main","designer: a cat heredoc with $(date) into the temp folder passes","CATDATE","orchestrator:designer",0,""],
+  ["main","sed with [ in its script does not crash","sed -i 's/\\[/(/' README.md && git push --force","",2,"force push"],
+  ["story/x","builder: git commit -m\"new feature\" passes","git commit -m\"new feature\"","orchestrator:builder",0,""],
+  ["main","rm -f *.log at the root passes","rm -f *.log","",0,""],
+  ["main","cp *.md docs/ passes","cp *.md docs/","",0,""],
+  ["main","a dynamic route folder is not a glob","cp tmp.tsx \"tests/[id]/page.tsx\"","",0,""],
+  ["main","rm -rf t* takes the tests folder: blocked","rm -rf t*","",2,"locked"],
+  ["linkedTests","a variable path through the real folder asks","rm real/tests/$UNSET_NAME_Z","",0,"\"ask\""],
+  ["main","env --split-string= 'rm locked' is blocked","env --split-string='rm tests/a.test.js'","",2,"locked"],
+  ["main","rm tests/[[:alpha:]].test.js is blocked","rm tests/[[:alpha:]].test.js","",2,"locked"],
+  ["main","rm tests/[]a].test.js is blocked","rm tests/[]a].test.js","",2,"locked"],
+  ["main","rm tests/{a,x/y}.test.js is blocked","rm tests/{a,x/y}.test.js","",2,"locked"],
+  ["main","rm tests/{a,{b,c}}.test.js is blocked","rm tests/{a,{b,c}}.test.js","",2,"locked"],
+  ["main","rm tests/\\a.test.js is blocked","rm tests/\\a.test.js","",2,"locked"],
 ];
 let fail = 0;
 let caseNo = 0;
 // session: a session id; one starting with orch (or fresh-after-clear) was launched in the main checkout.
 for (let [branch, title, command, agent, exit, msg, tool = "Bash", session = `t${++caseNo}`] of cases) {
   if (command === "MAINDIR") command = `git -C "${dirs.main}" merge story/y`;
+  const T = realpathSync(os.tmpdir());
+  if (command === "LOOPTMP") command = `S=${T}/sp; for f in k8op q49e c47x; do cat x > $S/$f.txt; done`;
+  if (command === "LOOPCLIMB") command = `S=${T}/sp; for f in a ../b; do cat x > $S/$f.txt; done`;
+  if (command === "GLUEDGLOB") command = `rm -f "${T}/shots/"*.png`;
+  if (command === "TPL1") command = `cat x > ${T}/sp/${"${z:-..}"}/${"${z:-..}"}/src.js`;
+  if (command === "TPL2") command = `set -- ../..; cat x > ${T}/sp/$1/src.js`;
+  if (command === "TPL3") command = `for f in a b; do f=zz; cat x > ${T}/sp/$f; done`;
+  if (command === "TPL4") command = `for f in a; do :; done; mapfile -t f < ${T}/l; cat x > ${T}/sp/$f/src.js`;
+  if (command === "TPL5") { const sp5 = path.join(base, "sp5"); mkdirSync(sp5, { recursive: true }); try { symlinkSync(dirs.main, path.join(sp5, "r")); } catch { if (!existsSync(path.join(sp5, "r"))) { console.log(`skip ${title} (no symlinks here)`); continue; } } command = `for f in r; do cat x > ${sp5}/$f/src/a.js; done`; }
+  if (command === "TPL6") command = `S=${T}/sp; x=.; for f in a; do :; done; select f in $x$x; do cat x > $S/$f/src/a.js; break; done <<< 1`;
+  if (command === "CATDATE") command = `cat > ${T}/m.html <<EOF\n<div class=a>built $(date)</div>\nEOF`;
   if (command === "MOVEDCOMMIT") command = `git -C "${dirs.moved}" commit -m x`;
   // tool "SessionStart" sends that event; tool "Skill" loads the skill named in command.
   const event = tool === "SessionStart" ? { hook_event_name: "SessionStart" }
     : tool === "EnterWorktree" ? { hook_event_name: "PreToolUse", tool_name: "EnterWorktree", tool_input: { path: dirs[command] } }
     : tool.startsWith("SessionStart:") ? { hook_event_name: "SessionStart", source: tool.slice(13) }
+    : tool === "Write" ? { hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: path.resolve(dirs[branch], command), content: "x" } }
     : tool === "Skill" ? { hook_event_name: "PreToolUse", tool_name: "Skill", tool_input: { skill: command } }
     : { hook_event_name: "PreToolUse", tool_name: tool, tool_input: { command } };
   const input = { ...event, cwd: dirs[branch], session_id: session, ...(agent ? { agent_type: agent, agent_id: "a1" } : {}) };
   // Where Claude Code launched the session (CLAUDE_PROJECT_DIR): the case's folder, except for the orchestrator's
   // sessions (orch…), launched in the main checkout and now working in a worktree it entered.
   const launched = /^(orch|fresh-after-clear)/.test(session) ? dirs.main : dirs[branch];
-  const r = spawnSync("node", [G], { input: JSON.stringify(input), cwd: dirs[branch], encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: launched } });
+  if ((session === "symlinked" || branch === "linkedTests") && dirs.linkedTestsOk === false) { console.log(`skip ${title} (no symlinks here)`); continue; }
+  if (session === "symlinked") { const link = path.join(base, "link-main"); try { symlinkSync(dirs.main, link); } catch {} input.cwd = link; if (input.tool_name === "Write") input.tool_input.file_path = path.join(link, "tests", "a.test.js"); }
+  const r = spawnSync("node", [G], { input: JSON.stringify(input), cwd: dirs[branch], encoding: "utf8", timeout: 20000, env: { ...process.env, CLAUDE_PROJECT_DIR: launched } });
   const out = r.stderr + r.stdout;
   const ok = r.status === exit && (msg ? out.includes(msg) : !out.includes('"ask"'));
   if (!ok) fail++;

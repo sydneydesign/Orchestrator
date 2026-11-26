@@ -66,7 +66,7 @@ Name every agent instance `<role>-<scope>`. Scope is the story ID or a short top
 
 ## 4. Brief every delegation
 
-The agent does not see this conversation. Always write the brief to `.orchestrator/work/<scope>/brief.md`: it is the durable record. Pass the agent the brief's **absolute path** plus one line on where the task fits. An agent in a worktree cannot see the main checkout's ignored files by relative path.
+The agent does not see this conversation. Always write the brief to `.orchestrator/work/<scope>/brief.md`: it is the durable record. Pass the agent the brief's **absolute path** plus one line on where the task fits. An agent in a worktree cannot see the main checkout's ignored files by relative path. Source files in the brief (`Target`, `Read first`, `You may edit`) go by their path relative to the repository root: an agent in a worktree edits its own copy, and Claude Code refuses an edit through the main checkout's path. Only the brief, the report and the rest of `.orchestrator/work/` are absolute, in the main checkout. (Easy One, 2026-11-26: two isolated agents were refused edits to source files named by absolute paths.)
 
 Never paste conversation history into a brief.
 
@@ -86,9 +86,12 @@ Scratch files (logs, probes, measuring pages) go in your scratchpad, never as ne
 Edit files with Edit or Write, never with sed -i.
 Leave nothing running: stop every process you started before you report.
 Search with grep, rg or find through Bash (Select-String, Get-ChildItem in PowerShell) when Grep and Glob are not among your tools.
+Read PDFs with the Read tool, which reads them by page; never install or script a PDF reader. When a web page fails, use another source; never fetch the same URL again.
+Put a script longer than one line (Python, Node) in a scratchpad file and run that file; never pass it as a heredoc.
+In a worktree of your own, run one plain command per call: you already run there, so never cd into it, and never put git inside ( ) or chain it with &&. Claude Code refuses git it cannot verify there.
 ```
 
-The lines from `Server:` on reach every role, which never reads `references/harness.md`. On 25 November in Easy One, without them: a subagent probed a server nobody had started, a design-system agent wrote a measuring page into the repository, and BSD `sed -i` failed three times on macOS. Some Claude Code versions have no Grep or Glob tool: a designer called Grep twice and got «No such tool available» (Easy One, 2026-11-25). The roles still list them for the versions that have them.
+The lines from `Server:` on reach every role, which never reads `references/harness.md`. On 25 November in Easy One, without them: a subagent probed a server nobody had started, a design-system agent wrote a measuring page into the repository, and BSD `sed -i` failed three times on macOS. Some Claude Code versions have no Grep or Glob tool: a designer called Grep twice and got «No such tool available» (Easy One, 2026-11-25). The roles still list them for the versions that have them. On 26 November a researcher wrote a macOS-only script to read PDFs after `pdftotext` was missing and fetched a failing page twice, and an isolated designer had two commands refused for `cd` and git inside `( )`.
 
 Pass the story file path, never a paraphrase. A paraphrase changes the criteria the agent works from.
 

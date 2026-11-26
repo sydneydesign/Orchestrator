@@ -39,6 +39,10 @@ function toplevel(dir) {
 // The checkout the session works in. A worktree has its own toplevel and its own branch.
 const root = toplevel(cwd) ?? path.resolve(process.env.CLAUDE_PROJECT_DIR || cwd);
 // The folder a shell command runs in so far: the session's, then wherever a cd on the line moved it.
+// Real path: a session folder reached through a symlink must still match the repository's own paths.
+const realCwd = (() => { try { return realpathSync(cwd); } catch { return cwd; } })();
+// The shell's folder is logical: cd .. from a linked folder goes to the link's parent. Paths are resolved
+// to real ones where they are compared (realish).
 let here = cwd;
 // Projects installed before the rename keep .orquestador.json and .orquestador/ until they migrate.
 const STATE = existsSync(path.join(root, ".orchestrator.json")) || !existsSync(path.join(root, ".orquestador.json")) ? ".orchestrator" : ".orquestador";
@@ -71,6 +75,9 @@ const lockedPaths = existsSync(lockFile)
   ? stripBom(readFileSync(lockFile, "utf8")).split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#"))
   : [];
 const locked = new Set(lockedPaths.map(key));
+// The same entries through their real paths: a locked test under a symlinked folder (tests -> real/tests) is
+// also guarded at real/tests/... Filled once realish exists, below.
+const lockedReal = new Set();
 // A directory that holds a locked file: deleting or moving it takes the file with it.
 const holdsLocked = (rel) => rel === "" || [...locked].some((l) => l.startsWith(rel + "/"));
 // The guard's failure count: no agent edits it, moves it or deletes the folder that holds it.
@@ -151,8 +158,24 @@ if (input.hook_event_name === "SessionStart") {
   // (Easy One, 2026-11-26: a session Sydney opened in an Orca worktree loaded the orchestrator's procedure too.)
   const main = mainCheckout(cwd);
   if (isWorker()) {
+    // A worktree opened by hand (an Orca tab) skipped the project's setup: say so first.
+    // (Easy One, 2026-11-26: a designer in such a worktree reached for the main checkout's node_modules.)
+    let unset = "";
+    try {
+      const mc = JSON.parse(stripBom(readFileSync(path.join(main, `${STATE}.json`), "utf8")));
+      const gitDir = path.resolve(cwd, execFileSync("git", ["rev-parse", "--git-dir"], { cwd, stdio: ["ignore", "pipe", "ignore"] }).toString().trim());
+      // Worktrees under .claude/worktrees/ come from the hook, which runs setup; one elsewhere was opened by hand.
+      const script = path.join(main, STATE, "worktree.mjs");
+      // Inside .claude/worktrees/: a relative path that neither climbs nor jumps to another drive.
+      const fromHooks = path.relative(path.join(main, ".claude", "worktrees"), realpathIf(toplevel(cwd) ?? cwd));
+      const byHook = !(fromHooks === ".." || fromHooks.startsWith(`..${path.sep}`) || path.isAbsolute(fromHooks));
+      // Copied files already there mean someone set it up (0.13.0's script left no mark).
+      const copiedThere = [].concat(mc.worktree?.copy ?? []).some((c) => typeof c === "string" && c.trim() && !/[*?[{]/.test(c) && existsSync(path.join(toplevel(cwd) ?? cwd, c)));
+      if (([].concat(mc.worktree?.setup ?? [], mc.worktree?.copy ?? []).length || existsSync(path.join(main, ".worktreeinclude"))) && !byHook && !copiedThere && existsSync(script) && !existsSync(path.join(gitDir, "orchestrator-setup")))
+        unset = ` This worktree has not been set up: before anything else, run \`node "${script}" setup "${toplevel(cwd) ?? cwd}"\` and wait for it to finish.`;
+    } catch {}
     process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart",
-      additionalContext: `This project uses orchestrator, and its orchestrator is the session in the main checkout (${main}). This session runs in a linked worktree on its own branch: you are a worker here, not the orchestrator. Do not load the orchestrator:orchestrate skill. Work and commit on this worktree's branch only; never switch, commit in or merge into the main checkout. The human merges your branch through the orchestrator.` } }));
+      additionalContext: `This project uses orchestrator, and its orchestrator is the session in the main checkout (${main}). This session runs in a linked worktree on its own branch: you are a worker here, not the orchestrator. Do not load the orchestrator:orchestrate skill. Work and commit on this worktree's branch only; never switch, commit in or merge into the main checkout. The human merges your branch through the orchestrator.` + unset } }));
     process.exit(0);
   }
   const b = main ? currentBranch(main) : null;
@@ -178,6 +201,7 @@ if (input.hook_event_name === "PreToolUse" && input.tool_name === "Skill" && /(^
 // (its scratchpad, a log). Anything else, another worktree or the user's settings included, is not its to change.
 // Symlinks are resolved first: on macOS /tmp is /private/tmp.
 const realish = (abs) => { let d = abs, rest = ""; while (!existsSync(d) && path.dirname(d) !== d) { rest = path.join(path.basename(d), rest); d = path.dirname(d); } try { return path.join(realpathSync(d), rest); } catch { return abs; } };
+for (const l of lockedPaths) { const r = relTo(realish(root), realish(path.join(root, l))); if (r !== key(l) && !r.startsWith("..")) lockedReal.add(r); }
 const under = (abs, dir) => { const r = path.relative(dir, abs); return !(r === ".." || r.startsWith(`..${path.sep}`) || path.isAbsolute(r)); };
 const TEMP_DIRS = [...new Set([os.tmpdir(), process.env.TMPDIR, process.env.TEMP, process.env.TMP, WIN ? null : "/tmp"].filter(Boolean).map((d) => realish(path.resolve(d))))];
 const readOnlyBlocks = (abs) => {
@@ -187,7 +211,7 @@ const readOnlyBlocks = (abs) => {
 };
 
 function checkFileWrite(rel, absolute) {
-  if (locked.has(rel)) block(`${rel} is a locked acceptance test. Report the problem instead of changing the test; only the orchestrator unlocks it, on the product owner's request.`);
+  if (locked.has(rel) || lockedReal.has(rel)) block(`${rel} is a locked acceptance test. Report the problem instead of changing the test; only the orchestrator unlocks it, on the product owner's request.`);
   if (rel === mapRel) block(`${rel} is generated. Change the stories and run stories.mjs instead.`);
   if (inSubagent && rel === LOCK_REL) block("subagents cannot change the locked-tests list.");
   if (touchesBreaker(rel, false)) block(`${rel} is the guard's own record. No agent changes it.`);
@@ -198,9 +222,14 @@ function checkFileWrite(rel, absolute) {
 if (input.hook_event_name === "PreToolUse" && ["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(input.tool_name)) {
   const target = input.tool_input?.file_path ?? input.tool_input?.notebook_path;
   if (!target) process.exit(0);
-  const abs = path.resolve(cwd, target);
-  const base = toplevel(path.dirname(abs)) ?? root;
-  checkFileWrite(relTo(base, abs), abs);
+  // The path as written (with the session folder's link resolved) and its real path are both checked: a link to
+  // the repository, or a symlinked folder inside it, must not hide a locked file.
+  const written = path.resolve(cwd, target);
+  const viaSession = written === cwd || written.startsWith(cwd + path.sep) ? realCwd + written.slice(cwd.length) : written;
+  for (const abs of new Set([viaSession, realish(written)])) {
+    const base = toplevel(path.dirname(abs)) ?? toplevel(path.dirname(realish(abs))) ?? root;
+    checkFileWrite(relTo(realish(base), abs), abs);
+  }
   process.exit(0);
 }
 
@@ -242,7 +271,7 @@ function programIndex(raw, onAssign = () => {}, bare = raw) {
     // command -v git only looks the name up.
     if (name === "command" && /^-[vV]$/.test(raw[s + 1] ?? "")) break;
     if (KEYWORD.test(t)) { s++; continue; }
-    // X="a b" is one word: its quoted value is the next token here.
+    // X="a b" arrives as X= and a quote placeholder: the quoted value is the next token.
     if (ASSIGN.test(t)) { const q = /=$/.test(t) && /^__Q\d+__$/.test(bare[s + 1] ?? ""); onAssign(q ? t + raw[s + 1] : t); s += q ? 2 : 1; continue; }
     if (w === undefined) break;
     const [short = "", ...long] = w.split(" ");
@@ -264,9 +293,9 @@ function commands(line, group = 0) {
   const quoted = [], double = new Set();
   // The shell leaves $ inside single quotes alone: \x01 marks it so the variable expansion leaves it too.
   const bare = line.replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g, (_, d, s) => { if (d !== undefined) double.add(quoted.length); quoted.push(d ?? s.replace(/\$/g, "\x01")); return ` __Q${quoted.length - 1}__ `; });
-  const scripts = new Set([...bare.matchAll(/(?:^|[\s\\/;&|(])(?:bash|sh|zsh|dash|ksh|fish|csh|tcsh|pwsh|powershell|cmd)(?:\.exe)?(?:\s+(?:[-+]\w*[oO]\s+\S+|--(?:rcfile|init-file)\s+\S+|[-+]{1,2}[\w-]+|\/(?!c\b)[a-z]:?\w*))*?\s+(?:-\w*c|-command|\/c)\s+__Q(\d+)__/gi)].map((m) => +m[1]));
+  const scripts = new Set([...bare.matchAll(/(?:^|[\s\\/;&|(])(?:bash|sh|zsh|dash|ksh|fish|csh|tcsh|pwsh|powershell|cmd)(?:\.exe)?(?:\s+(?:[-+]\w*[oO]\s+\S+|--(?:rcfile|init-file)\s+\S+|[-+]{1,2}[\w-]+|\/(?!c\b)[a-z]:?\w*))*?\s+(?:-\w*c|-command|\/c)\s*__Q(\d+)__/gi)].map((m) => +m[1]));
   // env -S runs its string as env's own arguments: options, VAR=value, then the program.
-  const envS = new Set([...bare.matchAll(/(?:^|[\s;&|(])env(?:\s+-\S+)*?\s+(?:-\w*S|--split-string=?)\s+__Q(\d+)__/g)].map((m) => +m[1]));
+  const envS = new Set([...bare.matchAll(/(?:^|[\s;&|(])env(?:\s+-\S+)*?\s+(?:-\w*S\s*|--split-string(?:=\s*|\s+))__Q(\d+)__/g)].map((m) => +m[1]));
   envS.forEach((i) => scripts.add(i));
   const shellish = SHELLISH.test(line) || RERUNS.test(line);
   // Quoted arguments that stay text: the line is one search or gh message, with no prefix, pipe, redirect
@@ -458,7 +487,7 @@ function checkGit(args) {
       let staged = [];
       try { staged = execFileSync("git", ["diff", "--cached", "--name-only"], { cwd: dirArg, stdio: ["ignore", "pipe", "ignore"] }).toString().split(/\r?\n/).filter(Boolean).map(key); }
       catch { /* not a repository: nothing staged */ }
-      const hit = staged.find((f) => locked.has(f) || f === LOCK_REL);
+      const hit = staged.find((f) => locked.has(f) || lockedReal.has(f) || f === LOCK_REL);
       if (hit) block(`${hit} is locked. Unstage it; only the orchestrator commits changes to locked files.`);
     }
   }
@@ -563,32 +592,77 @@ function checkPaths(tokens, dir, removes = false) {
     if (lostDir && p && !p.startsWith("-") && !p.includes("$") && !path.isAbsolute(p) && !NULL_DEVICE.test(p)) p = `$CWD/${p}`;
     if (!p || p.startsWith("-") || NULL_DEVICE.test(p)) continue;
     if (p.includes("$")) { unresolvedPath(p, dir, base, removes); continue; }
-    const rel = relTo(base, path.resolve(dir, p));
-    if (locked.has(rel)) block(`${rel} is a locked acceptance test. It cannot be changed, moved or deleted.`);
-    if (removes && !rel.startsWith("..") && holdsLocked(rel)) block(`${rel || "."} holds locked acceptance tests. It cannot be moved or deleted.`);
-    if (inSubagent && rel === LOCK_REL) block("subagents cannot change the locked-tests list.");
-    if (touchesBreaker(rel, removes)) block(`${rel || "."} holds the guard's own record. No agent changes, moves or deletes it.`);
-    if (isRole("builder") && storiesRel && rel.startsWith(storiesRel)) block("the builder does not edit story files. Report the criterion status; the orchestrator updates the markers.");
-    if (rel === mapRel) block(`${rel} is generated. Change the stories and run stories.mjs instead.`);
+    // As written and as resolved: a symlinked folder inside the repository must not hide a guarded file.
+    const rels = [...new Set([relTo(base, path.resolve(dir, p)), relTo(base, realish(path.resolve(dir, p)))])];
+    for (const rel of rels) {
+      // A removal also takes what lies under a matched folder.
+      // A glob the guard reads for certain (*, ?, a plain [class], a flat {a,b}) is matched segment by segment;
+      // any other ([[:alpha:]], []a], a brace with / or another brace) names everything under its fixed folder.
+      const wild = isGlob(rel);
+      const fixed = wild ? rel.slice(0, rel.search(/[*?[{\\]/)).replace(/[^/]*$/, "") : rel;
+      const complex = wild && /\[:|\[!?\]|\{[^}]*[/{]|\\/.test(rel);
+      const names = (g) => !wild ? g === rel : complex ? g.startsWith(fixed) : globNames(rel, g, removes);
+      const hit = [...locked, ...lockedReal].find(names);
+      if (hit) block(`${hit} is a locked acceptance test. It cannot be changed, moved or deleted.`);
+      if (removes && !rel.startsWith("..") && !wild && (holdsLocked(rel) || [...lockedReal].some((l) => l.startsWith(rel + "/")))) block(`${rel || "."} holds locked acceptance tests. It cannot be moved or deleted.`);
+      if (inSubagent && names(LOCK_REL)) block("subagents cannot change the locked-tests list.");
+      if (touchesBreaker(rel, removes) || (wild && names(BREAKER_REL))) block(`${rel || "."} holds the guard's own record. No agent changes, moves or deletes it.`);
+      const storiesHit = () => { const sr = storiesRel.replace(/\/$/, ""), n = sr.split("/").length, ps = rel.split("/"); return complex ? sr.startsWith(fixed) || fixed.startsWith(storiesRel) : ps.length >= n ? globNames(ps.slice(0, n).join("/"), sr, false) : globNames(rel, sr, true); };
+      if (isRole("builder") && storiesRel && (rel.startsWith(storiesRel) || (wild && storiesHit()))) block("the builder does not edit story files. Report the criterion status; the orchestrator updates the markers.");
+      if (mapRel && names(mapRel)) block(`${mapRel} is generated. Change the stories and run stories.mjs instead.`);
+    }
   }
+}
+
+// A shell glob: *, ? or a [class] with its closing ], or a brace group with a comma or .. in it.
+const isGlob = (p) => /[*?\\]|\[[^\]]*\]|\{[^{}]*(,|\.\.)/.test(p);
+// One glob segment as a regex. A brace group counts as anything in its segment (a superset); an unmatched [
+// is a literal. On any error the segment matches everything: a false block beats a bypass.
+function segmentTest(seg) {
+  try {
+    let re = "";
+    const s = seg.replace(/\{[^{}]*(,|\.\.)[^{}]*\}/g, "\x05");
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (c === "\x05" || c === "*") re += "[^/]*";
+      else if (c === "?") re += "[^/]";
+      else if (c === "[" && s.indexOf("]", i + 2) > i) {
+        const end = s.indexOf("]", i + 2);
+        let body = s.slice(i + 1, end);
+        const neg = /^[!^]/.test(body);
+        if (neg) body = body.slice(1);
+        re += `[${neg ? "^" : ""}${body.replace(/[\\\]^]/g, "\\$&")}]`;
+        i = end;
+      } else re += c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+    const rx = new RegExp(`^${re}$`, FOLD ? "i" : "");
+    return (x) => rx.test(x);
+  } catch { return () => true; }
+}
+function globNames(pattern, guardedPath, removes) {
+  const ps = pattern.split("/").filter((x, i, a) => x || i < a.length - 1), gs = guardedPath.split("/");
+  if (ps.length > gs.length || (ps.length < gs.length && !removes)) return false;
+  return ps.every((seg, i) => segmentTest(seg)(gs[i]));
 }
 
 // Any .. on the command line, in a loop list too (for f in ../x), can carry a variable's path anywhere.
 const LINE_CLIMBS = () => /(^|[\s\\/'"=])\.\.([\\/\s'";]|$)/.test(String(input.tool_input?.command ?? ""));
 // A path with a variable the guard cannot resolve ($f in a loop, $(...)): any value could stand there.
 // When the pattern can name a guarded file, the human confirms.
-function unresolvedPath(p, dir, base, removes) {
+// Checked as written and as resolved: a folder that links elsewhere must not hide a guarded file either way.
+function unresolvedPath(p, dir, base, removes) { unresolvedPathOnce(p, dir, base, removes, (x) => x); unresolvedPathOnce(p, dir, base, removes, realish); }
+function unresolvedPathOnce(p, dir, base, removes, resolve) {
   const at = p.indexOf("$");
   const prefix = p.slice(0, at);
   const tail = p.slice(at);
   const climbs = /(^|[\\/])\.\.([\\/]|$)/.test(tail) || LINE_CLIMBS();
   // The fixed folder before the variable: `tests/a$X.js` sits in tests/, `$D/a` in no known folder.
   const fixedDir = /[\\/]/.test(prefix) ? prefix.replace(/[^\\/]*$/, "") : "";
-  const relDir = fixedDir ? relTo(base, path.resolve(dir, fixedDir)) : null;
+  const relDir = fixedDir ? relTo(base, resolve(path.resolve(dir, fixedDir))) : null;
   if (!climbs && (relDir === ".." || relDir?.startsWith("../"))) return;
-  const relPrefix = prefix ? relTo(base, path.resolve(dir, prefix)) + (/[\\/]$/.test(prefix) ? "/" : "") : null;
+  const relPrefix = prefix ? relTo(base, resolve(path.resolve(dir, prefix))) + (/[\\/]$/.test(prefix) ? "/" : "") : null;
   if (isRole("builder") && storiesRel && relPrefix?.startsWith(storiesRel) && !climbs) block("the builder does not edit story files. Report the criterion status; the orchestrator updates the markers.");
-  const guarded = [...locked, mapRel, ...(inSubagent ? [LOCK_REL, BREAKER_REL] : [])].filter(Boolean);
+  const guarded = [...locked, ...lockedReal, mapRel, ...(inSubagent ? [LOCK_REL, BREAKER_REL] : [])].filter(Boolean);
   let hit;
   if (climbs) hit = guarded.length || (isRole("builder") && storiesRel) ? "any file" : null;
   else {
@@ -782,6 +856,8 @@ if (input.hook_event_name === "PreToolUse" && ["Bash", "PowerShell"].includes(in
       const targets = [...(WRITERS.test(tokens[0]) ? args.filter((t) => !t.startsWith("-")) : []), ...redirTargets]
         .filter((t) => !/^&?\d*$/.test(t) && !NULL_DEVICE.test(t));
       // A variable left unresolved could hold ../ and climb out of the temp folder; after a lost cd, so could a relative path.
+      // A loop exemption was tried in 0.13.1 and dropped: each review found another way to set the variable
+      // (select, a nameref, printf -v, mapfile). A read-only role writes each file's full path.
       const outside = targets.find((t) => t.includes("$") || (lostDir && !path.isAbsolute(t)) || readOnlyBlocks(path.resolve(here, t)));
       if (outside) block(`${agentType} is read-only. It writes only its report under .orchestrator/work/, and scratch files in the temp folder (not ${outside}${outside.includes("$") ? ": write the full path, not a variable the guard cannot resolve" : ""}).`);
     }
@@ -803,7 +879,7 @@ if (input.hook_event_name === "SubagentStop" || input.hook_event_name === "Stop"
   // list, the difference from HEAD shows it. This check ignores stop_hook_active: the builder
   // restores the files (git restore <file>) or stops for good only by reporting BLOCKED.
   const spec = (list) => list.map((p) => (FOLD ? `:(icase)${p}` : p));
-  const lockSet = spec([...lockedPaths, `${STATE}/locked-tests.txt`]);
+  const lockSet = spec([...lockedPaths, ...lockedReal, `${STATE}/locked-tests.txt`]);
   const run = (a) => { try { return execFileSync("git", a, { cwd: root, stdio: ["ignore", "pipe", "ignore"] }).toString().trim(); } catch { return ""; } };
   const names = (a) => run(a).split(/\r?\n/).filter(Boolean);
   const changed = names(["diff", "--name-only", "HEAD", "--", ...lockSet, ...spec(storiesRel ? [storiesRel, mapRel] : [])]);

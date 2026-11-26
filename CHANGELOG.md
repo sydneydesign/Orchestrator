@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.13.1 — 2026-11-26
+
+Fixes from the Easy One watch of 26 November, each reproduced first, kept to what survived six code reviews.
+
+- A glob is matched segment by segment against the locked tests: `rm tests/*`, `rm tests/[!b].test.js` and `rm -rf t*` are blocked, `rm -f *.log` and `cp *.md docs/` pass. A brace group counts as anything in its segment. A glob the guard cannot read for certain (`[[:alpha:]]`, `[]a]`, a brace group with `/` or another brace, a backslash escape) names everything under its fixed folder: `rm tests/{a,x/y}.test.js` and `rm tests/\a.test.js` are blocked.
+- Symlinks: each path is checked both as written and as resolved, for shell commands, Write and Edit, paths with a variable, the commit check and the builder's Stop check. The locked list is also read through its real paths, so neither a session folder reached through a link nor a symlinked `tests -> real/tests` hides a locked test. `cd ..` from a linked folder is followed as the shell does.
+- A worker in a worktree opened by hand (an Orca tab) is told at its start to run the project's setup first, when the project has one (commands, files to copy, or a `.worktreeinclude`) and that worktree shows no sign of it. Worktrees under `.claude/worktrees/` come from the hook, which runs setup. `worktree.mjs setup` leaves a mark for this.
+- The brief tells every role to put a script longer than one line in a scratchpad file and run it, to read PDFs with the Read tool, to try another source when a web page fails, and, in a worktree of its own, to run one plain command per call. It names source files relative to the repository root: Claude Code refused two isolated agents' edits through the main checkout's paths.
+- `env -S"…"`, `env --split-string= '…'` and `cmd /c"…"` are read as scripts.
+- `hooks/check-guard.mjs` has 301 cases, each with a 20-second limit; symlink cases are skipped, and say so, where links cannot be made.
+- Tried and dropped, each because review found ways through it: a loop exemption for read-only roles (a variable in a target stays blocked: write the full path), reading an interpreter's heredoc as its script (`perl -ne system$_` runs its heredoc as shell), and joining a quote to the word it touches (`git commit -m"new feature"` read as `-n` and `-a`).
+- Known, unchanged: a quoted folder glued to a glob (`"<dir>/"*.png`) is read as two words, and a `bash -c` or `env -S` script in glued quoted pieces is checked by its first piece.
+
 ## 0.13.0 — 2026-11-26
 
 One orchestrator per repository, and the human's checkout stays on the main branch. In Easy One on 26 November a session switched the main checkout to `explora/botones`, the human's merge into main fast-forwarded that branch instead, and a session the human opened in an Orca worktree loaded the orchestrator's procedure too: three sessions acted on one folder.

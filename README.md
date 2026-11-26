@@ -239,6 +239,8 @@ These are a starting set. The orchestrator creates a project role when a job nee
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the changes in each version. After an update, restart the CLI.
 
+**From 0.13.0 to 0.13.1.** Nothing to change. A project with its own copy of `worktree.mjs` copies it again, so the guard can tell a worktree that ran its setup.
+
 **From 0.12.0 to 0.13.0.** Nothing to change for the hierarchy: the guard and the procedure carry it. A project whose own rules have the orchestrator switch the main checkout (a live block, an exploration) drops that rule. To give isolated agents a ready worktree, add `"worktree": { "setup": [...], "copy": [...], "teardown": [...] }` to `.orchestrator.json` and rerun `/orchestrator:install`, or do its step 5.3 by hand: copy `scripts/worktree.mjs` to `.orchestrator/worktree.mjs` and register the two hooks. With the hooks, Claude Code keeps every subagent's worktree when it finishes; the close's `tidy.mjs` removes the ones nobody committed to. A project with its own copy of `tidy.mjs` or `launch.mjs` copies `worktree.mjs` next to it, since both import it.
 
 **From 0.11.2 to 0.12.0.** Copy `stories.mjs` into the project again for `--pr --link`. Optional keys: `git.mergeMethod`, `git.trustedBots`, `git.ignoredChecks`. The guard now asks before the orchestrator's merges into the main branch instead of blocking them: a project rule that the human types the merge can go. A project with its own copy of the guard ports 0.12.0's diff of `hooks/guard.mjs` whole and runs `hooks/check-guard.mjs` against it.

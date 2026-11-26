@@ -1,5 +1,5 @@
 // Tests for reflect.mjs: the translation from `stories.mjs --json` to a gg-ez reflection, with no network and no
-// database. Run with `node --test skills/stories/scripts/`.
+// database. Run with `node --test "skills/**/*.test.mjs"`.
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";

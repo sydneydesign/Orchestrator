@@ -1,19 +1,22 @@
 #!/usr/bin/env node
 // Reflect a repository's stories in gg-ez.
 //
-//   node <plugin>/skills/stories/scripts/reflect.mjs [--source <name>] [--tests] [--dry-run]
+//   node <plugin>/skills/stories/scripts/reflect.mjs [--source <name>] [--tests] [--dry-run] [--any-branch]
 //
-// Run it inside the repository. It reads `node <storiesDir>/stories.mjs --json`, turns each story into a piece of
-// gg-ez's reflection format, asks git and gh which stories have a branch or an open pull request, and posts the
-// reflection to gg-ez with the project's reflection key. gg-ez creates, changes and cancels the project's tasks to
-// match, and answers how many.
+// Run it inside the repository, on the tip of its default branch. It reads `node <storiesDir>/stories.mjs --json`,
+// turns each story into a piece of gg-ez's reflection format, asks git and gh which stories have a branch or an
+// open pull request, and posts the reflection to gg-ez with the project's reflection key. gg-ez creates, changes and
+// cancels the project's tasks to match, and answers how many.
 //
 //   --source <name>  the source name, when it is not the repository's folder name. It must be the key's source.
 //   --tests          run the project's tests first (`stories.mjs --tests`), so each state matches the map. Without
 //                    it, the last saved test results count, and with none, criteria with tests are unverified.
-//   --dry-run        print what would be sent, by state, and send nothing. Needs no key.
+//   --dry-run        print how many pieces would go, by state, and send nothing. Needs no key.
+//   --any-branch     send even when HEAD is not the tip of the default branch on origin, or the stories folder has
+//                    uncommitted changes. The next run from the default branch puts gg-ez back to it.
 //
-// Settings come only from the environment, never from a file or an argument, and neither is printed:
+// Settings come only from the environment, never from a file or an argument, and neither is printed nor passed to
+// any program it runs (git, gh, the project's tests):
 //   GGEZ_URL  gg-ez's address, https (http only for this machine).
 //   GGEZ_KEY  the project's reflection key, generated once in gg-ez under Settings › Projects › <project>.
 //
@@ -22,7 +25,7 @@
 // as its gg-ez state type and name.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,6 +42,62 @@ const STATES = {
 
 /** A source name as gg-ez takes it: lowercase letters, digits and single hyphens, up to 40 characters. */
 const SOURCE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** Variables no program it runs may see. The tests also lose the GitHub tokens. */
+const SECRETS = ["GGEZ_URL", "GGEZ_KEY"];
+const TOKENS = ["GH_TOKEN", "GITHUB_TOKEN"];
+
+/** The options, or what is wrong with them. Anything unknown is refused: a typo must not send for real. */
+export function parseArgs(args) {
+  const options = { ok: true, source: null, tests: false, dryRun: false, anyBranch: false };
+  const flags = { "--tests": "tests", "--dry-run": "dryRun", "--any-branch": "anyBranch" };
+  for (let at = 0; at < args.length; at += 1) {
+    const arg = args[at];
+    if (arg in flags) {
+      options[flags[arg]] = true;
+    } else if (arg === "--source" || arg.startsWith("--source=")) {
+      const value = arg === "--source" ? args[++at] : arg.slice("--source=".length);
+      if (!value || value.startsWith("--")) return { ok: false, error: "--source needs a name." };
+      options.source = value;
+    } else {
+      return { ok: false, error: `Unknown argument: ${arg}. Use --source <name>, --tests, --dry-run or --any-branch.` };
+    }
+  }
+  return options;
+}
+
+/** The environment for a program it runs: never the address or the key, and no GitHub token for the tests. */
+export function childEnv(env, { forTests = false } = {}) {
+  const drop = new Set(forTests ? [...SECRETS, ...TOKENS] : SECRETS);
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !drop.has(name)));
+}
+
+/** `owner/name` of a GitHub remote, or null. Only github.com itself, not a lookalike. */
+export function gitHubName(remote) {
+  const match = String(remote).match(/(?:^|[@/])github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i);
+  return match ? `${match[1]}/${match[2]}` : null;
+}
+
+/** A JSON file's text without the byte order mark some editors put at its start. */
+export function stripBom(text) {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
+/** The IDs of the stories without a title: gg-ez would reject the whole reflection for one of them. */
+export function untitled(stories) {
+  return stories.filter((story) => typeof story.title !== "string" || !story.title.trim()).map((story) => story.id);
+}
+
+/**
+ * Why this checkout is not what should be reflected, or null. Only the tip of the default branch on origin, with
+ * the stories folder clean: from anywhere else the reflection would undo itself at the next merge.
+ */
+export function headProblem({ head, tip, dirty, branch }) {
+  if (!tip) return `Could not find origin/${branch} to compare with.`;
+  if (head !== tip) return `HEAD is not the tip of origin/${branch}: pull, or switch to it.`;
+  if (dirty) return "The stories folder has uncommitted changes.";
+  return null;
+}
 
 /** Does a branch name carry this story ID as a whole word? `x/ALT-001-smoke` does; `x/ALT-0011` does not. */
 export function hasId(branch, id) {
@@ -93,7 +152,7 @@ export function reflectionOf({ source, stories, activities, branches, prBranches
 
 /** Where to send and with what key, from the environment. Errors never repeat either value. */
 export function readSettings(env) {
-  const missing = ["GGEZ_URL", "GGEZ_KEY"].filter((name) => !String(env[name] ?? "").trim());
+  const missing = SECRETS.filter((name) => !String(env[name] ?? "").trim());
   if (missing.length) {
     return { ok: false, error: `Missing ${missing.join(" and ")} in the environment. Nothing was sent.` };
   }
@@ -133,7 +192,12 @@ export function reportOf(pieces, status, body) {
 // ---------- The command
 
 function run(file, args, options = {}) {
-  return execFileSync(file, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...options }).trim();
+  return execFileSync(file, args, {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+    env: childEnv(process.env),
+    ...options,
+  }).trim();
 }
 
 function fail(message) {
@@ -141,44 +205,113 @@ function fail(message) {
   process.exit(1);
 }
 
-function gitHubRepo(remote) {
-  const match = remote.match(/github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?\/?$/i);
-  return match ? `${match[1]}/${match[2]}` : null;
+function readJson(file, label) {
+  try {
+    return JSON.parse(stripBom(readFileSync(file, "utf8")));
+  } catch {
+    return fail(`${label} is not valid JSON. Nothing was sent.`);
+  }
 }
 
 async function main(argv) {
-  const args = argv.slice(2);
-  const option = (name) => {
-    const at = args.indexOf(name);
-    return at >= 0 ? args[at + 1] : undefined;
-  };
-  const dryRun = args.includes("--dry-run");
+  const options = parseArgs(argv.slice(2));
+  if (!options.ok) fail(options.error);
+
+  // The settings first: without them there is no point running the tests, git or gh.
+  const settings = options.dryRun ? null : readSettings(process.env);
+  if (settings && !settings.ok) fail(settings.error);
 
   let root;
   try {
-    root = run("git", ["rev-parse", "--show-toplevel"]);
+    root = run("git", ["rev-parse", "--show-toplevel"], { stdio: ["ignore", "pipe", "ignore"] });
   } catch {
     fail("Run it inside a git repository. Nothing was sent.");
   }
 
   let storiesDir = "product";
-  const configFile = path.join(root, ".orchestrator.json");
-  if (existsSync(configFile)) {
-    try {
-      storiesDir = JSON.parse(readFileSync(configFile, "utf8")).storiesDir ?? storiesDir;
-    } catch {
-      fail(".orchestrator.json is not valid JSON. Nothing was sent.");
+  for (const name of [".orchestrator.json", ".orquestador.json"]) {
+    const file = path.join(root, name);
+    if (existsSync(file)) {
+      storiesDir = readJson(file, name).storiesDir ?? storiesDir;
+      break;
     }
   }
   const script = path.join(root, storiesDir, "stories.mjs");
   if (!existsSync(script)) fail(`There is no ${storiesDir}/stories.mjs in this repository. Nothing was sent.`);
 
-  if (args.includes("--tests")) {
+  const source = options.source ?? path.basename(root);
+  if (!SOURCE.test(source) || source.length > 40) {
+    fail(`"${source}" is not a source name gg-ez takes (lowercase letters, digits and hyphens): use --source <name>. Nothing was sent.`);
+  }
+
+  let remote = "";
+  try {
+    remote = run("git", ["remote", "get-url", "origin"], { cwd: root, stdio: ["ignore", "pipe", "ignore"] });
+  } catch {
+    // No origin: no branches, no pull requests, no links, and nothing to compare HEAD with.
+  }
+  let repo = null;
+  let prBranches = [];
+  const name = gitHubName(remote);
+  if (name) {
     try {
-      execFileSync(process.execPath, [script, "--tests", "--summary"], { cwd: root, stdio: ["ignore", "ignore", "inherit"] });
-    } catch (error) {
-      // Failing tests exit 1 and still leave their results; 2 means there are no results to read.
-      if (error.status !== 1) fail("stories.mjs --tests could not run the tests. Nothing was sent.");
+      const view = JSON.parse(run("gh", ["repo", "view", name, "--json", "url,defaultBranchRef"], { cwd: root }));
+      repo = { url: view.url, defaultBranch: view.defaultBranchRef?.name ?? "main" };
+      prBranches = JSON.parse(
+        run("gh", ["pr", "list", "--repo", name, "--state", "open", "--limit", "1000", "--json", "headRefName"], { cwd: root }),
+      ).map((pr) => pr.headRefName);
+    } catch {
+      fail("gh could not read the repository or its pull requests (is it installed and signed in?), so the states would be wrong. Nothing was sent.");
+    }
+  }
+
+  let branches = [];
+  const tips = new Map();
+  if (remote) {
+    try {
+      for (const line of run("git", ["ls-remote", "--heads", "origin"], { cwd: root }).split("\n")) {
+        const [sha, ref] = line.split("\trefs/heads/");
+        if (ref) {
+          branches.push(ref);
+          tips.set(ref, sha);
+        }
+      }
+    } catch {
+      fail("git could not list the branches on origin, so the states would be wrong. Nothing was sent.");
+    }
+    let defaultBranch = repo?.defaultBranch ?? null;
+    if (!defaultBranch) {
+      try {
+        defaultBranch = run("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], {
+          cwd: root,
+          stdio: ["ignore", "pipe", "ignore"],
+        }).replace(/^origin\//, "");
+      } catch {
+        defaultBranch = "main";
+      }
+    }
+    const problem = headProblem({
+      head: run("git", ["rev-parse", "HEAD"], { cwd: root }),
+      tip: tips.get(defaultBranch) ?? null,
+      dirty: run("git", ["status", "--porcelain", "--", storiesDir], { cwd: root }) !== "",
+      branch: defaultBranch,
+    });
+    if (problem && !options.anyBranch) {
+      fail(`${problem} Only the default branch is reflected, or the next run would undo this one. Use --any-branch to send anyway. Nothing was sent.`);
+    }
+    if (problem) console.warn(`${problem} Sending anyway (--any-branch).`);
+  }
+
+  if (options.tests) {
+    try {
+      execFileSync(process.execPath, [script, "--tests", "--summary"], {
+        cwd: root,
+        stdio: ["ignore", "ignore", "inherit"],
+        env: childEnv(process.env, { forTests: true }),
+      });
+    } catch {
+      // With --summary, failing tests still exit 0; anything else is a validation problem or no results, and the
+      // `--json` read below reports it.
     }
   }
 
@@ -199,74 +332,43 @@ async function main(argv) {
   }
   const stories = Array.isArray(data.stories) ? data.stories : [];
   if (!stories.length) fail("There are no stories to reflect. Nothing was sent.");
+  const withoutTitle = untitled(stories);
+  if (withoutTitle.length) fail(`These stories have no title: ${withoutTitle.join(", ")}. Nothing was sent.`);
 
-  let activities = [];
   const activitiesFile = path.join(root, storiesDir, "activities.json");
-  if (existsSync(activitiesFile)) {
-    try {
-      activities = JSON.parse(readFileSync(activitiesFile, "utf8"));
-    } catch {
-      fail(`${storiesDir}/activities.json is not valid JSON. Nothing was sent.`);
+  const activities = existsSync(activitiesFile) ? readJson(activitiesFile, `${storiesDir}/activities.json`) : [];
+
+  const reflection = reflectionOf({
+    source,
+    stories,
+    activities: Array.isArray(activities) ? activities : [],
+    branches,
+    prBranches,
+    repo,
+    storiesDir,
+  });
+  for (const story of stories) {
+    if (titleFor(story.title) !== story.title.replace(/\r\n|\r|\n/g, " ").trim()) {
+      console.warn(`${story.id}: its title is longer than gg-ez takes, and goes cut.`);
     }
   }
-
-  const source = option("--source") ?? path.basename(root);
-  if (!SOURCE.test(source) || source.length > 40) {
-    fail(`"${source}" is not a source name gg-ez takes (lowercase letters, digits and hyphens): use --source <name>. Nothing was sent.`);
-  }
-
-  let remote = "";
-  try {
-    remote = run("git", ["remote", "get-url", "origin"], { cwd: root, stdio: ["ignore", "pipe", "ignore"] });
-  } catch {
-    // No origin: no branches, no pull requests, no links.
-  }
-  let branches = [];
-  if (remote) {
-    try {
-      branches = run("git", ["ls-remote", "--heads", "origin"], { cwd: root })
-        .split("\n")
-        .map((line) => line.split("\trefs/heads/")[1])
-        .filter(Boolean);
-    } catch {
-      fail("git could not list the branches on origin, so the states would be wrong. Nothing was sent.");
-    }
-  }
-  let repo = null;
-  let prBranches = [];
-  const name = gitHubRepo(remote);
-  if (name) {
-    try {
-      const view = JSON.parse(run("gh", ["repo", "view", name, "--json", "url,defaultBranchRef"], { cwd: root }));
-      repo = { url: view.url, defaultBranch: view.defaultBranchRef?.name ?? "main" };
-      prBranches = JSON.parse(
-        run("gh", ["pr", "list", "--repo", name, "--state", "open", "--limit", "1000", "--json", "headRefName"], { cwd: root }),
-      ).map((pr) => pr.headRefName);
-    } catch {
-      fail("gh could not read the repository or its pull requests (is it installed and signed in?), so the states would be wrong. Nothing was sent.");
-    }
-  }
-
-  const reflection = reflectionOf({ source, stories, activities, branches, prBranches, repo, storiesDir });
-  const cut = stories.filter((story) => titleFor(story.title) !== String(story.title).replace(/\r\n|\r|\n/g, " ").trim());
-  for (const story of cut) console.warn(`${story.id}: its title is longer than gg-ez takes, and goes cut.`);
   const byState = new Map();
   for (const piece of reflection.piezas) byState.set(piece.estado, (byState.get(piece.estado) ?? 0) + 1);
   const summary = [...byState].map(([state, count]) => `${state} ${count}`).join(", ");
   console.log(`${reflection.piezas.length} pieces from "${source}": ${summary}.`);
-  if (dryRun) {
+  if (options.dryRun) {
     console.log("Nothing was sent (--dry-run).");
     return;
   }
 
-  const settings = readSettings(process.env);
-  if (!settings.ok) fail(settings.error);
   let response;
   try {
     response = await fetch(settings.endpoint, {
       method: "POST",
       headers: { authorization: `Bearer ${settings.key}`, "content-type": "application/json" },
       body: JSON.stringify(reflection),
+      // A redirect would drop the key or turn the POST into a GET: say it instead of following it.
+      redirect: "error",
       signal: AbortSignal.timeout(120_000),
     });
   } catch (error) {
@@ -283,8 +385,16 @@ async function main(argv) {
   console.log(report.text);
 }
 
-const invoked = process.argv[1] ? path.resolve(process.argv[1]) : "";
-const self = fileURLToPath(import.meta.url);
+// Run as a command, also through a symlink or a junction (argv keeps the link, import.meta.url the real path).
+const real = (file) => {
+  try {
+    return realpathSync(file);
+  } catch {
+    return path.resolve(file);
+  }
+};
+const invoked = process.argv[1] ? real(process.argv[1]) : "";
+const self = real(fileURLToPath(import.meta.url));
 if (process.platform === "win32" ? invoked.toLowerCase() === self.toLowerCase() : invoked === self) {
   await main(process.argv);
 }

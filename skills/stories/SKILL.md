@@ -1,6 +1,6 @@
 ---
 name: stories
-description: Write, split, review and maintain user stories in a project that uses orchestrator. Covers the story file format, acceptance criteria as rules plus key examples, verification markers, splitting patterns, decisions, and the anti-patterns the validator flags. Use when creating or editing a story, turning a request into stories, splitting a large story, checking if a story is ready, or recording that a criterion fails.
+description: Write, split, review and maintain user stories in a project that uses orchestrator. Covers the story file format, acceptance criteria as rules plus key examples, verification markers, splitting patterns, decisions, and the anti-patterns the validator flags. Use when creating or editing a story, turning a request into stories, splitting a large story, checking if a story is ready, or recording that a criterion fails, or reflecting the stories in a gg-ez project.
 ---
 
 # Stories
@@ -115,8 +115,9 @@ Things the validator cannot see. Check them yourself when you write or edit a st
 
 `scripts/reflect.mjs` sends the stories to a gg-ez project as a reflection: each story becomes a task there, found again by its ID, and gg-ez creates, changes and cancels tasks to match. The state comes from the story's status and from git: discarded → Cancelado, works → Hecho, an open PR from a branch with its ID → En revisión, a branch with its ID on origin or partial → En curso, anything else → Por hacer. The activity travels as the group, and the story file on the default branch as the link.
 
-- Run it with `--dry-run` first: it prints the pieces by state and sends nothing.
-- `GGEZ_URL` and `GGEZ_KEY` come from the environment, never from a file or an argument. The key is generated in gg-ez, once, by an admin of the project.
+- Run it with `--dry-run` first: it prints how many pieces would go, by state, and sends nothing.
+- It reflects only the tip of the default branch on origin, with the stories folder clean: from a story branch or a worktree, the next run from the default branch would undo it. `--any-branch` sends anyway.
+- `GGEZ_URL` and `GGEZ_KEY` come from the environment, never from a file or an argument, and no program it runs (git, gh, the project's tests) sees them. The key is generated in gg-ez, once, by an admin of the project.
 - The source is the repository's folder name, or `--source <name>`. It must match the key's source, or gg-ez rejects the reflection.
 - `--tests` runs the project's tests first, so each state matches the map. Without it, the last saved results count.
 - A validator error, a missing `gh` on a GitHub repository, or gg-ez's rejection stops it before anything changes, and says why.

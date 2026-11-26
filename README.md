@@ -157,13 +157,13 @@ A bug is never a new story: it is a failing marker on the criterion it breaks. A
 
 ### Reflect the stories in gg-ez
 
-A repository's stories can show up in a [gg-ez](https://github.com/SergioHyliacom/gg-ez) project as tasks, kept up to date: each story is a task, its ID the key, its activity the group, and its state follows the story (discarded → Cancelado, works → Hecho, an open PR from a branch with its ID → En revisión, a branch with its ID or partial → En curso, the rest → Por hacer). The command reads `stories.mjs --json`, asks git and `gh` for branches and PRs, and posts it with the project's key:
+A repository's stories can show up in a gg-ez project as tasks, kept up to date: each story is a task, its ID the key, its activity the group, and its state follows the story (discarded → Cancelado, works → Hecho, an open PR from a branch with its ID → En revisión, a branch with its ID or partial → En curso, the rest → Por hacer). From the tip of the default branch, the command reads `stories.mjs --json`, asks git and `gh` for branches and PRs, and posts it with the project's key:
 
 ```
-GGEZ_URL=https://… GGEZ_KEY=ggez_… node <plugin>/skills/stories/scripts/reflect.mjs [--source <name>] [--tests] [--dry-run]
+node <plugin>/skills/stories/scripts/reflect.mjs [--source <name>] [--tests] [--dry-run] [--any-branch]
 ```
 
-The address and the key come only from the environment and are never printed. To run it after every merge into main, copy `skills/stories/templates/reflect-in-gg-ez.yml` to `.github/workflows/` and add `GGEZ_URL` and `GGEZ_KEY` as repository secrets.
+The address and the key come only from the environment (`GGEZ_URL`, `GGEZ_KEY`: set them without typing the key on the command line, which a shell's history keeps), are never printed, and no program it runs sees them. To run it after every merge into the default branch, copy `skills/stories/templates/reflect-in-gg-ez.yml` to `.github/workflows/` and add `GGEZ_URL` and `GGEZ_KEY` as repository secrets.
 
 ## Configuration
 

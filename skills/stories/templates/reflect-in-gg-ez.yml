@@ -1,15 +1,15 @@
-# Reflect this repository's stories in gg-ez after every merge into main, and on demand (Actions › Run workflow).
-# Copy it to .github/workflows/ in the repository whose stories you reflect.
+# Reflect this repository's stories in gg-ez after every merge into the default branch, and on demand from it
+# (Actions › Run workflow).
+# Copy it to .github/workflows/ in the repository whose stories you reflect, and adjust the two marked lines.
 #
 # It needs two repository secrets (Settings › Secrets and variables › Actions):
 #   GGEZ_URL  gg-ez's address, https.
 #   GGEZ_KEY  the project's reflection key, generated once in gg-ez under Settings › Projects › <project>.
 # On a personal repository only its owner can add them.
 #
-# The key reaches the plugin's code, so that code is pinned to a commit, as are the actions. Move `ref` to a newer
-# commit of the plugin on purpose, never to a branch.
-# If the source in gg-ez is not the repository's name, add `--source <name>` to the last step.
-# `npm ci` is there so `--tests` can run the project's tests: change it to the project's own install.
+# Who sees the key: only the last step, which runs the plugin's code (pinned to a commit, as are the actions: move
+# `ref` to a newer commit of the plugin on purpose, never to a branch), git, gh and the project's own `stories.mjs`.
+# The project's install and tests run in earlier steps, with no secret: any dependency could read the environment.
 
 name: Reflect in gg-ez
 
@@ -22,12 +22,15 @@ permissions:
   contents: read
   pull-requests: read
 
+# A newer run replaces an older one: only the latest state of the default branch matters.
 concurrency:
   group: reflect-in-gg-ez
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   reflect:
+    # Only from the default branch: a run from another branch would be undone by the next merge.
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -35,7 +38,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: sydneydesign/Orchestrator
-          ref: bf7367957be52ec190054517f29910843b16346e
+          ref: 101ebfd337d98f88ad1c09661e91db9e66197857
           path: .orchestrator-plugin
           persist-credentials: false
       # Out of the project's folder, so its test runner does not pick up the plugin's tests.
@@ -43,8 +46,11 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+      # Adjust: the project's own install.
       - run: npm ci
-      - run: node "$RUNNER_TEMP/orchestrator-plugin/skills/stories/scripts/reflect.mjs" --tests
+      # Adjust: <storiesDir>/stories.mjs. The tests run here, with no secret; their results stay for the next step.
+      - run: node product/stories.mjs --tests --summary
+      - run: node "$RUNNER_TEMP/orchestrator-plugin/skills/stories/scripts/reflect.mjs"
         env:
           GGEZ_URL: ${{ secrets.GGEZ_URL }}
           GGEZ_KEY: ${{ secrets.GGEZ_KEY }}

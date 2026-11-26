@@ -255,7 +255,8 @@ function commands(line, group = 0) {
 const INTERPRETERS = /^(\S*[\\/])?(python[0-9.]*|py|node|perl|ruby|deno|bun|php|osascript)(\.exe)?$/i;
 // What starts another program from inside a script, in the languages above.
 const SPAWNS = /\b(subprocess|os\.(system|popen|exec\w*|spawn\w*)|popen|child_process|shell_exec|passthru|proc_open|qx)\b|\b(exec(File)?(Sync)?|spawn(Sync)?|system)\s*\(|\bBun\.(spawn|\$)|\bDeno\.(Command|run)|do shell script|`\s*git\b|\$\(\s*git\b/i;
-const MENTIONS_GIT = /(^|[^\w-])git(?![\w-])/i;
+// git, or gh: a script that runs gh pr merge is a merge too.
+const MENTIONS_GIT = /(^|[^\w-])(git|gh)(?![\w-])/i;
 // The bodies of the heredocs fed to an interpreter in a command line: the text that program runs.
 function interpreterHeredocs(line) {
   const bodies = [];
@@ -287,6 +288,65 @@ function gitSubIndex(args) {
 function gitSubcommand(c) {
   const args = c.slice(isGit(c[0]) ? 1 : 2);
   return String(args[gitSubIndex(args)] ?? "").toLowerCase();
+}
+
+// GitHub through gh. A merge or an approval is the product owner's: role agents never do either, and the
+// orchestrator asks the product owner each time, whatever git.allowPush says. --admin skips branch
+// protection and is blocked. Role agents only read GitHub: anything but a read verb, or a gh api call
+// that is not a GET, is the orchestrator's.
+const GH_VALUE_FLAGS = /^(-R|--repo|--hostname|-X|--method|-H|--header|-f|-F|--field|--raw-field|--input|-q|--jq|-t|--template|--cache|-p|--preview|-b|--body|-B|--base|-H|--head|-t|--title)$/;
+// checkout, clone and download change the checkout or write files: not reads.
+const GH_READS = /^(view|list|ls|status|checks|diff|watch|search|browse|issues|prs|repos|code|commits)$/;
+const GH_AREAS = /^(agent-task|alias|api|attestation|auth|browse|cache|co|codespace|completion|config|copilot|extension|gist|gpg-key|help|issue|label|org|pr|preview|project|release|repo|ruleset|run|search|secret|ssh-key|status|variable|version|workflow)$/;
+function checkGh(args) {
+  // area and verb: the first two words that are not flags or flag values (gh pr -R o/r merge 5).
+  const words = [];
+  for (let i = 0; i < args.length && words.length < 2; i++) {
+    if (/^-/.test(args[i])) { if (GH_VALUE_FLAGS.test(args[i])) i++; continue; }
+    words.push(args[i].toLowerCase());
+  }
+  const [area = "", verb = ""] = words;
+  const unknown = /\$/.test(area + verb);
+  const api = area === "api";
+  // gh api: the method from its own flag, else POST once it has fields.
+  let method = "", fields = false, endpoint = "";
+  if (api) {
+    for (let i = 0; i < args.length; i++) {
+      const t = args[i];
+      const m = /^(?:-X|--method)(?:=|$)(.*)$/.exec(t) ?? /^-X(\w+)$/.exec(t);
+      if (m) { method = (m[1] || args[++i] || "").toUpperCase(); continue; }
+      if (/^(-f|-F|--field|--raw-field|--input)(=.*)?$/.test(t)) { fields = true; if (!/=/.test(t)) i++; continue; }
+      if (/^-[fF]\S/.test(t)) { fields = true; continue; }
+      if (/^-/.test(t)) { if (GH_VALUE_FLAGS.test(t)) i++; continue; }
+      if (!endpoint && t.toLowerCase() !== "api") endpoint = t;
+    }
+  }
+  const verbOf = method || (fields ? "POST" : "GET");
+  const all = args.join(" ");
+  const merges = (area === "pr" && verb === "merge")
+    || (api && verbOf !== "GET" && (/pulls\/[^/\s]+\/merge\b|\/merges\b/i.test(endpoint) || /mergePullRequest|enablePullRequestAutoMerge|mergeBranch/i.test(all)));
+  const movesRef = api && verbOf !== "GET" && (/git\/refs\/heads\//i.test(endpoint) || /updateRef|deleteRef|createRef|updateRefs/i.test(all));
+  // A payload read from a file could hold a merge or an approval the guard cannot see.
+  const filePayload = api && verbOf !== "GET" && args.some((t) => /^--input(=|$)/.test(t) || /^(-[fF]\S*|--field=?|--raw-field=?)?[\w.]*=@/.test(t) || /^@/.test(t) || /\$/.test(t))
+    && /graphql|pulls|reviews|merge/i.test(endpoint);
+  const approves = (area === "pr" && verb === "review" && args.some((t, i) => !GH_VALUE_FLAGS.test(args[i - 1] ?? "") && (/^-[a-zA-Z]*a[a-zA-Z]*$/.test(t) || /^--approve(=|$)/.test(t))))
+    || (api && /\bevent["':=\s]*APPROVE\b/i.test(all));
+  if (merges && args.some((t) => /^--admin(=|$)/.test(t))) block("gh pr merge --admin skips the branch protection. Merge through the normal checks.");
+  if (inSubagent) {
+    if (merges) block("role agents never merge. The product owner merges, or asks the orchestrator to.");
+    if (approves) block("role agents never approve a pull request.");
+    const reads = api ? verbOf === "GET" && !/graphql/i.test(endpoint) : /^(search|browse|status)$/.test(area) || GH_READS.test(verb) || (area === "auth" && verb === "status");
+    if (unknown || !reads) block("role agents only read GitHub. Report what to post, and the orchestrator posts it.");
+    return;
+  }
+  if (unknown) confirm("the gh command is in a shell variable the guard cannot read. Confirm it does not merge or approve.");
+  // An alias (gh pm = pr merge) or an extension hides what it runs.
+  if (area === "alias" && /^(set|import)$/.test(verb)) confirm("a gh alias can hide a merge or an approval behind a new name. Confirm what it runs.");
+  if (area && !api && !GH_AREAS.test(area)) confirm(`gh ${area} is not one of gh's own commands: an alias or an extension. Confirm it does not merge or approve.`);
+  if (filePayload) confirm("this gh api call reads its payload from a file the guard cannot read. Confirm it does not merge or approve.");
+  if (movesRef) confirm("moving or deleting a branch on GitHub is the product owner's call. Confirm they asked for it.");
+  if (merges) confirm("a merge is the product owner's call. Confirm they asked for this one.");
+  if (approves) confirm("approving a pull request is the product owner's call. Confirm they asked for this one.");
 }
 
 function checkGit(args) {
@@ -342,7 +402,16 @@ function checkGit(args) {
   }
   if (["merge", "rebase", "cherry-pick", "pull", "am", "revert"].includes(sub)) {
     const b = currentBranch(dirArg);
-    if (b && protectedBranches.includes(b)) block(`git ${sub} on ${b} is blocked. Merging into ${b} happens only on the product owner's request.`);
+    if (b && protectedBranches.includes(b)) {
+      // The orchestrator merges into a protected branch with the product owner's click on this prompt, never by
+      // asking them to type the command. A fast-forward pull only brings the remote's commits, and --abort
+      // undoes. Rebase, cherry-pick, am and revert write commits of their own there: blocked.
+      // (Easy One, 2026-11-26: the human typed every merge into main, even the smallest.)
+      const undoes = has(/^--(abort|quit)$/);
+      if (inSubagent || !["merge", "pull"].includes(sub)) block(`git ${sub} on ${b} is blocked. Merging into ${b} is the orchestrator's, with the product owner's confirmation.`);
+      // A plain git pull --ff-only brings the branch's own upstream; one that names a source can bring any branch.
+      else if (!undoes && !(sub === "pull" && has(/^--ff-only$/) && rest.every((x) => /^-/.test(x)))) confirm(`merging into ${b} is the product owner's call. Confirm they accepted what this merge brings.`);
+    }
   }
   if (sub === "add" && broadAddBlocked && rest.some((a) => /^(-A|--all|-u|--update|\.|\.\/|:\/|\*)$/.test(a))) {
     block("broad `git add` is blocked. Stage the story's files by name.");
@@ -467,8 +536,6 @@ if (input.hook_event_name === "PreToolUse" && ["Bash", "PowerShell"].includes(in
   const data = splitDataHeredocs(String(input.tool_input?.command ?? ""));
   // The body of a text heredoc is not checked at all: the Write tool writes the same file unread.
   const cmds = commands(data.rest.replace(/\d*>&\d/g, " "));
-  // HUSKY=0 set for the commands after it: export, declare -x, or PowerShell's $env:.
-  if (/(^|[\s;&|(])(export\s+|declare\s+-\w*x\w*\s+|set\s+|\$env:)HUSKY\s*=\s*["']?0\b/i.test(data.rest)) block("HUSKY=0 skips the commit hooks. Fix the failing hook instead.");
   // Shell variables: `S=/tmp/x; ... > $S/log` writes to /tmp/x/log, not to a repo file named $S/log.
   // A command sees the assignments made before it on this line (`S=...` alone, or `export S=...`), then
   // the environment; ~ is the home folder and $PWD the folder the command runs in. What stays unresolved
@@ -529,9 +596,25 @@ if (input.hook_event_name === "PreToolUse" && ["Bash", "PowerShell"].includes(in
     learn(raw);
     // Strip wrappers, shell keywords and VAR=value prefixes: `HUSKY=0 git commit` is still a git commit,
     // and so is the body of a loop (`do rm $f`).
+    // HUSKY=0 exported for the commands after it (export, declare, typeset, set). Read from the command's
+    // own words, so a commit message or a heredoc that mentions it is text. (PowerShell's $env:HUSKY=0 and a
+    // bare HUSKY=0 are assignments, caught below.)
+    const words = raw.bare ?? raw;
+    const k = words.findIndex((w) => !KEYWORD.test(w) && !/^(builtin|command)$/i.test(w));
+    const exported = (i) => raw[i].slice(6) || (/^__Q\d+__$/.test(words[i + 1] ?? "") ? raw[i + 1] : "");
+    // Any export-like word, so eval export HUSKY=0 and echo export HUSKY=0 | source count too.
+    const ex = words.findIndex((w) => /^(export|declare|typeset|local|set|setenv)$/i.test(w));
+    if (ex >= 0 && words.some((w, i) => i > ex && ((/^HUSKY=/i.test(w) && /^0$/.test(exported(i))) || /^HUSKY=0$/i.test(raw[i] ?? "")))) block("HUSKY=0 skips the commit hooks. Fix the failing hook instead.");
+    // PowerShell: $env:HUSKY = "0", with spaces.
+    if (/^\$env:HUSKY=?$/i.test(words[k] ?? "") && /^0$/.test((words[k + 1] === "=" ? raw[k + 2] : raw[k + 1]) ?? "")) block("HUSKY=0 skips the commit hooks. Fix the failing hook instead.");
     const s = programIndex(raw, (t) => { if (/^\$?(env:)?HUSKY=["']?0/i.test(t)) block("HUSKY=0 skips the commit hooks. Fix the failing hook instead."); }, raw.bare);
-    const tokens = raw.slice(s);
+    let tokens = raw.slice(s);
     if (!tokens.length) continue;
+    // xargs, find -exec, parallel and watch run the command after them: check that command.
+    if (/^(xargs|find|parallel|watch|gxargs)(\.exe)?$/i.test(tokens[0].replace(/^.*[\\/]/, ""))) {
+      const j = tokens.findIndex((t, i) => i > 0 && (isGit(t) || /(^|[\\/])gh(\.exe)?$/i.test(t)));
+      if (j > 0) tokens = tokens.slice(j).filter((t) => !/^(\{\}|;|\;|\+)$/.test(t));
+    }
     // The arguments with their variables filled in; the program name stays as written.
     const args = tokens.slice(1).map(expand);
     // A script run inline (node -e, python -c, a heredoc) can call git in shapes the checks here cannot read:
@@ -539,7 +622,7 @@ if (input.hook_event_name === "PreToolUse" && ["Bash", "PowerShell"].includes(in
     // and starts a program, ask. A script that only edits text mentioning git (the common case) passes.
     if (INTERPRETERS.test(tokens[0])) {
       const script = tokens.some((t) => t.includes("<<")) ? interpreterHeredocs(line) : tokens.slice(1).join(" ").replace(/\x01/g, "$");
-      if (MENTIONS_GIT.test(script) && SPAWNS.test(script)) confirm(`this ${tokens[0]} script mentions git, and git calls inside a script are not checked. Confirm it does not commit, push or rewrite history.`);
+      if (MENTIONS_GIT.test(script) && SPAWNS.test(script)) { if (inSubagent && /(^|[^\w-])gh(?![\w-])/.test(script)) block(`a role agent cannot run gh from a ${tokens[0]} script: role agents only read GitHub, through gh itself.`); confirm(`this ${tokens[0]} script mentions git or gh, and calls inside a script are not checked. Confirm it does not commit, push, merge or rewrite history.`); }
     }
     // Windows PowerShell 5 expands $1 and eats quotes inside an inline script (it deleted a story's
     // criteria), and its -Encoding utf8 writes a BOM (it broke lint and can break a story's frontmatter).
@@ -564,10 +647,7 @@ if (input.hook_event_name === "PreToolUse" && ["Bash", "PowerShell"].includes(in
       checkGit(args);
       continue;
     }
-    if (/^gh$/i.test(tokens[0]) && /^pr$/i.test(tokens[1] ?? "") && /^merge$/i.test(tokens[2] ?? "")) {
-      if (inSubagent) block("role agents never merge. The product owner merges, or asks the orchestrator to.");
-      if (git.allowPush === false) confirm("git.allowPush is false in this project, so every merge needs the product owner's confirmation.");
-    }
+    if (/(^|[\\/])gh(\.exe)?$/i.test(tokens[0])) checkGh(args);
     // Redirections write too: split "x>file" and "> file" into their own tokens.
     const split = (raw.bare?.slice(s) ?? tokens).flatMap((t) => t.split(/(>>?)/)).filter(Boolean);
     const redirTargets = split.filter((t, i) => i > 0 && /^>>?$/.test(split[i - 1])).map((t) => expand(raw.restore?.(t) ?? t));

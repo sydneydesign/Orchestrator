@@ -10,16 +10,16 @@
 ## Push and remote
 
 - Push only when the human asks. When the human says "commit and push", do both: a commit alone is half the request.
-- Role agents never push; the guard blocks it. When the human asks, run the push yourself. With `git.allowPush: false` the guard makes Claude Code ask the human to confirm each push and each `gh pr merge`; that prompt is their consent, so run the command and let them approve it. Do not hand the command back to the human.
+- Role agents never push; the guard blocks it. When the human asks, run the push yourself. With `git.allowPush: false` the guard makes Claude Code ask the human to confirm each push.
+
+## Merging into the main branch
+
+- Merge accepted work into a protected branch once per block, at the close, not per story: small things ride along instead of each asking the human. In a project without pull requests, merge it yourself with `git merge --no-ff`. The guard makes Claude Code ask the human to confirm it, and so for every `gh pr merge`; that prompt is their consent. Run the command and let them approve it. Never hand the command back to the human to type. (Easy One, 2026-11-26: the human typed every merge into main, even the smallest.)
+- Merge earlier only when the human asks, or when someone else needs the work now.
 
 ## Pull requests
 
-- One PR per story, or one per block in the live profile.
-- Title: plain words a person understands without the story, for example "Members can reset their password". No story IDs in the title.
-- Body: what changed and what the reviewer must know, first and short. Then the output of `node <storiesDir>/stories.mjs --pr <ID>` for each story, the review summary and any ⚠️ manual steps.
-- When something visible changes, add before and after screenshots to the pull request description, never to the repository.
-- Create with `gh pr create` only after the human approves the push.
-- Merge only on the human's OK. If the project names a code owner (`git.codeOwner`), the PR goes to them for review.
+One PR per story, or one per block in the live profile. `references/ship.md` covers the title, the body, the screenshots and the watch until the merge.
 
 ## Optional: shared repositories
 

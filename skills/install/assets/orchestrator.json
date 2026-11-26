@@ -22,6 +22,7 @@
     "protectedBranches": ["main", "master"],
     "allowPush": true,
     "blockBroadAdd": true,
-    "codeOwner": "{{CODE_OWNER or null}}"
+    "codeOwner": "{{CODE_OWNER or null}}",
+    "mergeMethod": "merge"
   }
 }

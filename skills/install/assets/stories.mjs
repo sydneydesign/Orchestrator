@@ -6,6 +6,7 @@
 //   node stories.mjs --check         exit 1 on errors or if the map is stale
 //   node stories.mjs --ready ID...   exit 1 if any named story is not ready to build
 //   node stories.mjs --pr ID         print a PR checklist for one story
+//     --link <base>                  link the story file from <base>/<path>, for a PR body
 //   node stories.mjs --json          print the computed state as JSON (for agents)
 //
 // Configuration: stories.config.json next to this file.
@@ -382,7 +383,12 @@ if (flag("--pr")) {
   const s = stories.find((x) => x.id === listAfter("--pr")[0]);
   if (!s) { console.error("Story not found."); process.exit(2); }
   const res = (c) => c.kind === "test" ? ({ pass: "✅", fail: "❌" }[c.result] ?? "⚠️") : c.kind === "manual" ? "✅" : c.kind === "failing" ? "❌" : "⚠️";
-  finish([`## ${s.id} ${s.title}`, "", `${L.statuses[s.status]}, [${s.file}](${path.relative(ROOT, path.join(DIR, s.file)).split(path.sep).join("/")})`, "",
+  // --link <base>: a pull request's body resolves a relative link against the PR's own page, so it breaks.
+  // The base is the repository's blob URL at a commit, e.g. https://github.com/<owner>/<repo>/blob/<commit>.
+  const linkArg = args.includes("--link") ? args[args.indexOf("--link") + 1] ?? "" : "";
+  const base = linkArg.startsWith("--") ? "" : linkArg.replace(/\/+$/, "");
+  const target = path.relative(ROOT, path.join(DIR, s.file)).split(path.sep).join("/");
+  finish([`## ${s.id} ${s.title}`, "", `${L.statuses[s.status]}, [${s.file}](${base ? `${base}/${target}` : target})`, "",
     ...s.criteria.map((c) => `- ${res(c)} **${c.id}** ${c.head.replace(/^\*\*[^*]+\*\*\s*/, "")}`)].join("\n"), 0);
 }
 

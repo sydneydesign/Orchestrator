@@ -54,7 +54,7 @@ The guard reads a subagent's role from `agent_type`. `.orchestrator.json` → `r
 None of these needs a rule in any text. When a lesson's failure is on this list, delete the lesson.
 
 - **`hooks/guard.mjs`** blocks:
-  - commits, merges, rebases, pulls and cherry-picks on protected branches;
+  - commits, rebases, cherry-picks, `am` and `revert` on protected branches, and merges and pulls there by role agents;
   - pushes from role agents;
   - force pushes, `--no-verify`, `HUSKY=0`, and overriding or changing `core.hooksPath`;
   - broad `git add` and `commit -a`;
@@ -63,19 +63,24 @@ None of these needs a rule in any text. When a lesson's failure is on this list,
   - writes, moves or deletes on locked tests, the locked-tests list, the generated map and the guard's own record;
   - a builder editing stories;
   - read-only roles writing anywhere but `.orchestrator/work/` and the temp folder (their scratchpad), or running git commands that write;
-  - role agents loading the `orchestrate` skill or merging pull requests;
+  - role agents loading the `orchestrate` skill, merging or approving a pull request, or writing to GitHub at all: they run only gh's read verbs and `gh api` GETs;
+  - `gh pr merge --admin` for everyone;
   - a role committing, merging, rebasing or cherry-picking on a detached HEAD (a stopped rebase may finish);
   - the same failing command after `verify.maxSameFailure` runs;
   - in the PowerShell tool, an inline script (`node -e`, `python -c`) and `Set-Content`, `Add-Content` or `Out-File` with `-Encoding utf8`.
 
   It asks the human before:
-  - every push and pull-request merge when `git.allowPush` is `false`;
+  - every push when `git.allowPush` is `false`;
+  - every merge into a protected branch by the orchestrator, and a pull there that is not `--ff-only`;
+  - every merge or approval of a pull request by the orchestrator, through `gh pr` or `gh api`, a branch moved or deleted through `gh api`, and a `gh api` write whose payload is in a file;
   - an inline script (`node -e`, `python -c`, a heredoc) that mentions git and starts a program.
 
   Shell paths are read with their variables filled in from earlier assignments on the same command line and from the environment, and `~` as the home folder. A path whose variable stays unresolved asks the human when it could name a guarded file.
 
   It runs `verify.onBuilderStop` when a builder stops, and refuses the stop while locked files differ from their commit. It refuses the stop of a writing role on a detached HEAD.
 - **`stories.mjs --check`** fails on a stale map and on a context document that names a missing path or script.
+- **`scripts/watch-pr.mjs`** reports each failing check run, a conflict once per pushed commit, and the PR's readiness only once GitHub says it can merge with its checks green. It never reports your own replies (the marker from the signed-in account), and gives every comment whether its author has write access. It reports `escalate` when one issue has failed on three pushes in a row. Its cursors live in `.orchestrator/watch/`, which the close's tidy leaves alone.
+- **`scripts/pr-assets.mjs`** commits screenshots only to the orphan `pr-assets` branch, and refuses one that shares history with the current branch.
 
 ## Avoid
 

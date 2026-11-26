@@ -117,6 +117,8 @@ Talk to the main session in plain language: "build the password reset story", "r
 
 For visual work you want to iterate on quickly, ask for **exploration**. The orchestrator edits directly on an `explore/<topic>` branch while you watch. When you keep the result, it turns it into stories, tests and one review in a single pass, and the options you did not keep leave the code. Screenshots stay in `.orchestrator/work/` and never enter git.
 
+When you ask for a push, the orchestrator opens one pull request per story and looks after it until it is merged or closed. The title is the story ID and what a person notices. The body says what changed, shows before and after screenshots for visible changes, and gives honest evidence: who checked what and how, what nobody could check, each criterion's state, the commands that passed and the reviewers' verdicts. The screenshots go to a `pr-assets` branch that is never merged, so they stay out of the main branch. `watch-pr.mjs` watches the PR in the background and wakes the orchestrator for a failing check, a conflict, a new comment, or when the PR is ready to merge. Fixes go through a builder on the same branch. After three failed pushes for one issue, a redesign asked in review, or an open security point, the orchestrator stops and asks you. The guard asks you before every merge and every approval, and role agents only read GitHub.
+
 At the end of a block of work the orchestrator runs the full verification, writes lessons from real failures into `CLAUDE.md`, and cleans up without being asked: it stops its agents, keeps `state.md` to the current state, and runs `tidy.mjs`. Then it gives you one batched list: bad news first, decisions it made, and branches waiting to be pushed or merged.
 
 `tidy.mjs` shows a preview, then deletes the work folders of closed blocks, local branches already merged into the main branch (with their clean worktrees), and the caches you list in `tidy.caches`. It keeps a work folder that any file in the repository (a doc, a project skill, a new story not yet committed) or `state.md` still names, a branch that never had commits of its own, a branch its upstream lacks, a worktree with uncommitted changes or with reports in its own work folder, and any tracked file. Pass `--keep <folder or branch>` for work still in progress. If a close was skipped, the next session starts with one line saying what was left behind.
@@ -146,6 +148,7 @@ node <storiesDir>/stories.mjs --tests      run the tests, then generate the map
 node <storiesDir>/stories.mjs --check      fail on errors or a stale map (use in CI)
 node <storiesDir>/stories.mjs --ready ID   check that a story is ready to build
 node <storiesDir>/stories.mjs --pr ID      print the pull-request checklist for a story
+  --link <base>                            link the story file as <base>/<path>, for a PR body
 ```
 
 A bug is never a new story: it is a failing marker on the criterion it breaks. A decision that blocks stories (a provider, pricing, hosting) lives in `decisions/` and is closed only by the human.
@@ -172,6 +175,9 @@ A bug is never a new story: it is a failing marker on the criterion it breaks. A
 | `orca.builders` | Optional. `"terminal"` runs each builder of an isolated block in its own Orca terminal, so you can watch it, when the orchestrator runs inside Orca. Everything else stays a subagent. See `skills/orchestrate/references/orca.md`. |
 | `tidy.caches` | Optional. Ignored folders that rebuild themselves and grow (a screenshot cache, for example). The close clears them. |
 | `git` | Protected branches, whether pushes need confirmation, broad `git add`, the code owner |
+| `git.mergeMethod` | Optional. How the orchestrator merges a PR when you ask: `"merge"` (default) or `"squash"`. |
+| `git.trustedBots` | Optional. Bot accounts whose PR comments count as requests, like a person's with write access, for example `["claude[bot]"]` (default none). List a bot only when the people who can trigger it have write access. Every other bot's comment is a claim to check. |
+| `git.ignoredChecks` | Optional. Names of PR checks the watch leaves out, for example a deploy preview that always fails for this account. |
 
 A project's `CLAUDE.md` can adjust the process. For example, a prototype with demo data can ask for one review per story and tests only for criteria with logic.
 
@@ -179,7 +185,7 @@ A project's `CLAUDE.md` can adjust the process. For example, a prototype with de
 
 `hooks/guard.mjs` runs on session start, before shell commands and file edits, and when an agent stops. It blocks:
 
-- commits, merges, rebases and pulls on protected branches;
+- commits, rebases and cherry-picks on protected branches, and merges there by role agents;
 - force pushes, `--no-verify`, `HUSKY=0`, and changes to `core.hooksPath`;
 - broad `git add` and `commit -a`, and a branch switch and a commit in one command;
 - `reset --hard`, `clean -f`, and `checkout .` / `restore .`;
@@ -189,7 +195,7 @@ A project's `CLAUDE.md` can adjust the process. For example, a prototype with de
 - a commit on a detached HEAD from a role agent;
 - a command that has already failed the same way `verify.maxSameFailure` times.
 
-It asks the human before each push and merge when `git.allowPush` is `false`, and before an inline script that both mentions git and starts a program. When a builder stops, the guard runs `verify.onBuilderStop` and refuses the stop while locked files differ from their commit.
+It asks the human before each merge into a protected branch, each pull request merge or approval, each push when `git.allowPush` is `false`, and an inline script that both mentions git and starts a program. You click; you never type the command. The orchestrator merges accepted work once per block, at the close. When a builder stops, the guard runs `verify.onBuilderStop` and refuses the stop while locked files differ from their commit.
 
 The full list lives in `skills/orchestrate/references/harness.md` under **Enforced by code**. A rule on that list is never repeated in the instructions.
 
@@ -217,7 +223,7 @@ These are a starting set. The orchestrator creates a project role when a job nee
 
 | Path | Contents |
 |---|---|
-| `skills/orchestrate/` | The orchestrator's operating procedure, with references for the harness, git and roles, `scripts/tidy.mjs` for the close, and `scripts/launch.mjs` to run a builder in an Orca terminal |
+| `skills/orchestrate/` | The orchestrator's operating procedure, with references for the harness, git and roles, `scripts/tidy.mjs` for the close, `scripts/launch.mjs` to run a builder in an Orca terminal, and `scripts/pr-assets.mjs` and `scripts/watch-pr.mjs` for pull requests |
 | `skills/stories/` | How to write, split and maintain stories, with templates |
 | `skills/install/` | The project setup, and the assets it copies |
 | `agents/` | The shipped role contracts |
@@ -227,6 +233,8 @@ These are a starting set. The orchestrator creates a project role when a job nee
 ## Upgrading
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the changes in each version. After an update, restart the CLI.
+
+**From 0.11.2 to 0.12.0.** Copy `stories.mjs` into the project again for `--pr --link`. Optional keys: `git.mergeMethod`, `git.trustedBots`, `git.ignoredChecks`. The guard now asks before the orchestrator's merges into the main branch instead of blocking them: a project rule that the human types the merge can go. A project with its own copy of the guard ports 0.12.0's diff of `hooks/guard.mjs` whole and runs `hooks/check-guard.mjs` against it.
 
 **From 0.11.1 to 0.11.2.** Nothing to change. A project with its own copy of the guard ports 0.11.2's diff of `hooks/guard.mjs` whole: `commands()`, `programIndex()` and the constants above them depend on each other, and a guard that throws lets every command through.
 

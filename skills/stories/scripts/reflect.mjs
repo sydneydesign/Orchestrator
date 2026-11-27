@@ -230,16 +230,169 @@ export function pieceState(story, branches, prBranches, design = null) {
   return { ...STATES.unstarted };
 }
 
-/** The title as gg-ez stores it: one line, trimmed, and cut with an ellipsis if it is too long. */
-export function titleFor(title) {
-  const line = String(title).replace(/\r\n|\r|\n/g, " ").trim();
-  if (line.length <= TITLE_LIMIT) return line;
+/** A text cut to `limit` UTF-16 units with an ellipsis, by whole characters, or the text if it fits. */
+function cutTo(text, limit) {
+  if (text.length <= limit) return text;
   let cut = "";
-  for (const char of line) {
-    if (cut.length + char.length > TITLE_LIMIT - 1) break;
+  for (const char of text) {
+    if (cut.length + char.length > limit - 1) break;
     cut += char;
   }
   return `${cut.trimEnd()}…`;
+}
+
+/** The title as gg-ez stores it: one line, trimmed, and cut with an ellipsis if it is too long. */
+export function titleFor(title) {
+  return cutTo(String(title).replace(/\r\n|\r|\n/g, " ").trim(), TITLE_LIMIT);
+}
+
+// ---------- What the task says and links to (descripcion, enlaces)
+
+/** gg-ez's limits for a piece's description and links, in UTF-16 units. A link's address has the cap of `enlace`. */
+const DESCRIPTION_LIMIT = 20_000;
+const LINKS_LIMIT = 10;
+const LINK_NAME_LIMIT = 60;
+const LINK_URL_LIMIT = 2000;
+
+/** Control, format (zero-width, bidi) and line or paragraph separator characters: gg-ez refuses them in a name. */
+const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+
+/** The labels stories.mjs uses when the project sets none (stories.config.json → labels). */
+export const DEFAULT_LABELS = {
+  story: "Story",
+  criteria: "Acceptance criteria",
+  markers: ["test", "manual", "unverified", "unbuilt", "failing"],
+};
+
+const lf = (text) => String(text ?? "").replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** A story file's frontmatter lines and body, split as stories.mjs splits them. No frontmatter: no lines. */
+function splitStory(text) {
+  const match = lf(text).match(/^---\n([\s\S]*?)\n?---\n?([\s\S]*)$/);
+  return match ? { front: match[1].split("\n"), body: match[2] } : { front: [], body: lf(text) };
+}
+
+/**
+ * The text of a story's section, between its `## <heading>` (any case) and the next `## `, without HTML comments,
+ * trimmed; "" when the story has no such section. Pure.
+ */
+export function storySection(text, heading) {
+  const wanted = String(heading).trim().toLowerCase();
+  for (const part of splitStory(text).body.split(/^## /m).slice(1)) {
+    const newline = part.indexOf("\n");
+    if ((newline < 0 ? part : part.slice(0, newline)).trim().toLowerCase() !== wanted) continue;
+    return (newline < 0 ? "" : part.slice(newline + 1))
+      .replace(/^[ \t]*<!--[\s\S]*?-->[ \t]*(?:\n|$)/gm, "")
+      .replace(/<!--[\s\S]*?-->/g, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+  return "";
+}
+
+/** The story's `prototype:` frontmatter key, read as stories.mjs reads a key, or null: a list or nothing is no address. */
+export function prototypeOf(text) {
+  for (const line of splitStory(text).front) {
+    const pair = line.match(/^prototype:\s*(.*?)\s*(\s#.*)?$/);
+    if (!pair) continue;
+    const value = pair[1].trim().replace(/^(["'])(.*)\1$/, "$2").trim();
+    return value && !value.startsWith("[") ? value : null;
+  }
+  return null;
+}
+
+/**
+ * A criterion's state in gg-ez's words, the way stories.mjs counts it for the story's status: a test by its last
+ * result (pass → funciona, fail → falla, none → sin verificar), manual → funciona, and the marker's own state.
+ */
+export function criterionState(criterion) {
+  if (criterion.kind === "test") return { pass: "funciona", fail: "falla" }[criterion.result] ?? "sin verificar";
+  return { manual: "funciona", failing: "falla", unbuilt: "sin construir" }[criterion.kind] ?? "sin verificar";
+}
+
+/** One criterion as a plain line: `- <ID> (<state>) <rule>`, without the `**ID**` bold or the `[marker]` at its end. */
+function criterionLine(criterion, markers) {
+  const known = new RegExp(
+    `\\s*\\[(?:${markers.map(escapeRegExp).join("|")})(?![\\p{L}\\p{N}]).*\\]\\s*$`,
+    "iu",
+  );
+  const rule = String(criterion.head ?? "")
+    .replace(/^\*\*[^*]+\*\*\s*/, "")
+    .replace(known.test(String(criterion.head ?? "")) ? known : /\s*\[[^\]]+\]\s*$/, "")
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .trim();
+  return `- ${criterion.id} (${criterionState(criterion)}) ${rule}`.trimEnd();
+}
+
+/**
+ * The description of a story's task: its «Historia» section (the heading is the project's label), then its criteria,
+ * one per line with its state. Plain text with line breaks, cut to gg-ez's limit. null when the story has neither,
+ * which clears the task's description. Pure.
+ */
+export function descriptionOf({ text, criteria, labels = DEFAULT_LABELS }) {
+  const parts = [];
+  const story = storySection(text, labels.story);
+  if (story) parts.push(story);
+  if (criteria?.length) {
+    parts.push([labels.criteria, ...criteria.map((criterion) => criterionLine(criterion, labels.markers))].join("\n"));
+  }
+  return parts.length ? cutTo(parts.join("\n\n"), DESCRIPTION_LIMIT) : null;
+}
+
+/** The address as gg-ez takes it, normalised, or null: http or https only, within the cap of an address. */
+function linkUrl(value) {
+  if (typeof value !== "string") return null;
+  let url;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  return url.href.length <= LINK_URL_LIMIT ? url.href : null;
+}
+
+/** Would gg-ez take this link? A name of 1 to 60 once trimmed, with no control or invisible characters, and an address. */
+export function validLink(link) {
+  const name = typeof link?.nombre === "string" ? link.nombre.trim() : "";
+  return (
+    name.length >= 1 &&
+    name.length <= LINK_NAME_LIMIT &&
+    !INVISIBLE.test(name) &&
+    linkUrl(link.enlace) !== null
+  );
+}
+
+/** What a screen is: Figma for figma.com, Captura for an image, Pantalla otherwise. */
+function screenKind(href) {
+  const url = new URL(href);
+  if (url.hostname === "figma.com" || url.hostname.endsWith(".figma.com")) return "Figma";
+  return /\.(?:png|jpe?g|webp)$/i.test(url.pathname) ? "Captura" : "Pantalla";
+}
+
+/**
+ * The task's links: the prototype first («Prototipo»), then each screen named by its kind, numbered when there are
+ * several of a kind («Figma 1», «Figma 2»). Anything not http or https, or too long, is skipped; never more than 10. Pure.
+ */
+export function linksOf({ prototype, screens }) {
+  const kept = [];
+  const prototypeUrl = linkUrl(prototype);
+  if (prototypeUrl) kept.push({ kind: "Prototipo", enlace: prototypeUrl });
+  for (const screen of screens ?? []) {
+    const href = linkUrl(screen);
+    if (href) kept.push({ kind: screenKind(href), enlace: href });
+  }
+  const links = kept.slice(0, LINKS_LIMIT);
+  const total = new Map();
+  for (const { kind } of links) total.set(kind, (total.get(kind) ?? 0) + 1);
+  const seen = new Map();
+  return links
+    .map(({ kind, enlace }) => {
+      seen.set(kind, (seen.get(kind) ?? 0) + 1);
+      return { nombre: total.get(kind) > 1 ? `${kind} ${seen.get(kind)}` : kind, enlace };
+    })
+    .filter(validLink);
 }
 
 /** The reflection to send: the source and one piece per story. Pure: everything it needs comes in. */
@@ -253,6 +406,8 @@ export function reflectionOf({
   storiesDir,
   design = null,
   skip = [],
+  files = null,
+  labels = DEFAULT_LABELS,
 }) {
   const groups = new Map(activities.map((activity) => [activity.code, activity.name]));
   // Left out, so gg-ez cancels the task they had: a story with `reflect: null`, and an activity in --skip.
@@ -271,6 +426,12 @@ export function reflectionOf({
       }
       const group = groups.get(story.code);
       if (typeof group === "string" && group.trim()) piece.grupo = group;
+      // With the story files (`files`: ID → the file's text), the task's description and links come too.
+      if (files) {
+        const text = files.get(story.id) ?? "";
+        piece.descripcion = descriptionOf({ text, criteria: story.criteria ?? [], labels });
+        piece.enlaces = linksOf({ prototype: prototypeOf(text), screens: story.screens ?? [] });
+      }
       return piece;
     }),
   };
@@ -491,6 +652,24 @@ async function main(argv) {
   const activitiesFile = path.join(root, storiesDir, "activities.json");
   const activities = existsSync(activitiesFile) ? readJson(activitiesFile, `${storiesDir}/activities.json`) : [];
 
+  // The section headings and markers in the project's language, as stories.mjs reads them.
+  const configFile = path.join(root, storiesDir, "stories.config.json");
+  const own = existsSync(configFile) ? readJson(configFile, `${storiesDir}/stories.config.json`)?.labels ?? {} : {};
+  const markers = { test: "test", manual: "manual", unverified: "unverified", unbuilt: "unbuilt", failing: "failing", ...own.markers };
+  const labels = {
+    story: own.sections?.story ?? DEFAULT_LABELS.story,
+    criteria: own.sections?.criteria ?? DEFAULT_LABELS.criteria,
+    markers: Object.values(markers).filter((marker) => typeof marker === "string" && marker),
+  };
+  const files = new Map();
+  for (const story of stories) {
+    try {
+      files.set(story.id, readFileSync(path.join(root, storiesDir, story.file), "utf8"));
+    } catch {
+      fail(`Could not read ${storiesDir}/${story.file}. Nothing was sent.`);
+    }
+  }
+
   const reflection = reflectionOf({
     source,
     stories,
@@ -501,6 +680,8 @@ async function main(argv) {
     storiesDir,
     design,
     skip: options.skip,
+    files,
+    labels,
   });
   for (const story of stories) {
     if (titleFor(story.title) !== story.title.replace(/\r\n|\r|\n/g, " ").trim()) {
@@ -511,6 +692,10 @@ async function main(argv) {
   for (const piece of reflection.piezas) byState.set(piece.estado, (byState.get(piece.estado) ?? 0) + 1);
   const summary = [...byState].map(([state, count]) => `${state} ${count}`).join(", ");
   console.log(`${reflection.piezas.length} pieces from "${source}": ${summary}.`);
+  const described = reflection.piezas.filter((piece) => piece.descripcion).length;
+  const linked = reflection.piezas.filter((piece) => piece.enlaces?.length);
+  const links = linked.reduce((sum, piece) => sum + piece.enlaces.length, 0);
+  console.log(`${described} with a description, ${linked.length} with links (${links} links).`);
   if (options.dryRun) {
     console.log("Nothing was sent (--dry-run).");
     return;

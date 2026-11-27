@@ -345,7 +345,8 @@ export function descriptionOf({ text, criteria, labels = DEFAULT_LABELS }) {
   if (criteria?.length) {
     parts.push([labels.criteria, ...criteria.map((criterion) => criterionLine(criterion, labels.markers))].join("\n"));
   }
-  return parts.length ? cutTo(parts.join("\n\n"), DESCRIPTION_LIMIT) : null;
+  // A NUL byte would make gg-ez refuse the whole reflection (jsonb cannot store it), so it never leaves here.
+  return parts.length ? cutTo(parts.join("\n\n").replaceAll("\u0000", ""), DESCRIPTION_LIMIT) : null;
 }
 
 /** The address as gg-ez takes it, normalised, or null: http or https only, within the cap of an address. */

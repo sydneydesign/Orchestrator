@@ -304,6 +304,13 @@ describe("reflect: what the task says (descripcion)", () => {
     assert.equal(criterionState({ kind: "test", result: "skipped" }), "sin verificar");
   });
 
+  it("[REF-007.5] a NUL byte in the story never reaches gg-ez, which would refuse the whole reflection", () => {
+    const conNulo = FILE.replace("darme de alta", "darme\u0000 de alta");
+    const enviada = descriptionOf({ text: conNulo, criteria: [], labels: LABELS });
+    assert.ok(!enviada.includes("\u0000"));
+    assert.equal(enviada, "Como propietario de pyme,\nquiero darme de alta,\npara empezar la prueba.");
+  });
+
   it("[REF-007.5] without a Historia section it sends the criteria; with neither, null", () => {
     const noStory = FILE.replace(/## Historia\n[\s\S]*?\n\n/, "");
     assert.equal(storySection(noStory, "Historia"), "");

@@ -7,7 +7,13 @@ import { describe, it } from "node:test";
 import {
   badReflect,
   childEnv,
+  criterionState,
+  descriptionOf,
   designState,
+  linksOf,
+  prototypeOf,
+  storySection,
+  validLink,
   optionProblems,
   gitHubName,
   hasId,
@@ -229,6 +235,195 @@ describe("reflect: a story becomes a piece", () => {
     assert.equal(titleFor("Short"), "Short");
     // New lines become spaces, as gg-ez stores them.
     assert.equal(titleFor("Two\nlines"), "Two lines");
+  });
+});
+
+const LABELS = {
+  story: "Historia",
+  criteria: "Criterios de aceptación",
+  markers: ["test", "manual", "sin verificar", "sin construir", "falla"],
+};
+
+const FILE = [
+  "---",
+  "id: ALT-001",
+  "title: Darme de alta",
+  'prototype: "https://easy-one.example/alta"',
+  "screens: []",
+  "---",
+  "",
+  "## Historia",
+  "Como propietario de pyme,",
+  "quiero darme de alta,",
+  "para empezar la prueba.",
+  "",
+  "## Criterios de aceptación",
+  "- **ALT-001.1** Pide el correo. [test: src/a.test.ts › \"ALT-001.1 Pide el correo.\"]",
+  "",
+  "## Fuera de alcance",
+  "- El NIF.",
+  "",
+].join("\n");
+
+const CRITERIA = [
+  { id: "ALT-001.1", head: '**ALT-001.1** Pide el correo. [test: src/a.test.ts › "ALT-001.1 Pide el correo."]', kind: "test", result: "pass" },
+  { id: "ALT-001.2", head: "**ALT-001.2** Falla el test. [test: src/a.test.ts › \"x\"]", kind: "test", result: "fail" },
+  { id: "ALT-001.3", head: "**ALT-001.3** Sin resultado. [test: src/a.test.ts › \"y\"]", kind: "test" },
+  { id: "ALT-001.4", head: "**ALT-001.4** A mano. [manual 2026-11-09, Sydney]", kind: "manual" },
+  { id: "ALT-001.5", head: "**ALT-001.5** Por hacer. [sin construir]", kind: "unbuilt" },
+  { id: "ALT-001.6", head: "**ALT-001.6** Roto. [falla: el botón no responde]", kind: "failing" },
+  { id: "ALT-001.7", head: "**ALT-001.7** Sin mirar. [sin verificar]", kind: "unverified" },
+];
+
+describe("reflect: what the task says (descripcion)", () => {
+  it("[REF-007.5] is the story's Historia, then each criterion with its state in words, without bold or marker", () => {
+    assert.equal(
+      descriptionOf({ text: FILE, criteria: CRITERIA, labels: LABELS }),
+      [
+        "Como propietario de pyme,",
+        "quiero darme de alta,",
+        "para empezar la prueba.",
+        "",
+        "Criterios de aceptación",
+        "- ALT-001.1 (funciona) Pide el correo.",
+        "- ALT-001.2 (falla) Falla el test.",
+        "- ALT-001.3 (sin verificar) Sin resultado.",
+        "- ALT-001.4 (funciona) A mano.",
+        "- ALT-001.5 (sin construir) Por hacer.",
+        "- ALT-001.6 (falla) Roto.",
+        "- ALT-001.7 (sin verificar) Sin mirar.",
+      ].join("\n"),
+    );
+  });
+
+  it("[REF-007.5] a criterion's state is read as stories.mjs reads it: a test by its result, manual works", () => {
+    assert.deepEqual(
+      CRITERIA.map(criterionState),
+      ["funciona", "falla", "sin verificar", "funciona", "sin construir", "falla", "sin verificar"],
+    );
+    assert.equal(criterionState({ kind: "test", result: "skipped" }), "sin verificar");
+  });
+
+  it("[REF-007.5] without a Historia section it sends the criteria; with neither, null", () => {
+    const noStory = FILE.replace(/## Historia\n[\s\S]*?\n\n/, "");
+    assert.equal(storySection(noStory, "Historia"), "");
+    assert.equal(
+      descriptionOf({ text: noStory, criteria: CRITERIA.slice(0, 1), labels: LABELS }),
+      "Criterios de aceptación\n- ALT-001.1 (funciona) Pide el correo.",
+    );
+    assert.equal(
+      descriptionOf({ text: FILE, criteria: [], labels: LABELS }),
+      "Como propietario de pyme,\nquiero darme de alta,\npara empezar la prueba.",
+    );
+    assert.equal(descriptionOf({ text: noStory, criteria: [], labels: LABELS }), null);
+    assert.equal(descriptionOf({ text: "", criteria: [], labels: LABELS }), null);
+  });
+
+  it("[REF-007.5] the Historia heading is the project's label, matched as stories.mjs matches it", () => {
+    const english = "---\nid: X\n---\n## Story\r\nAs a user,\r\n<!-- a note -->\r\nI want it.\r\n## Acceptance criteria\r\n";
+    assert.equal(storySection(english, "Story"), "As a user,\nI want it.");
+    assert.equal(storySection(english, "Historia"), "");
+    assert.equal(storySection(FILE, "historia"), "Como propietario de pyme,\nquiero darme de alta,\npara empezar la prueba.");
+  });
+
+  it("[REF-007.5] a description longer than gg-ez takes is cut with an ellipsis, by characters", () => {
+    const long = [{ id: "ALT-001.1", head: `**ALT-001.1** ${"é".repeat(25_000)} [sin construir]`, kind: "unbuilt" }];
+    const text = descriptionOf({ text: "", criteria: long, labels: LABELS });
+    assert.equal(text.length, 20_000);
+    assert.ok(text.endsWith("…"));
+  });
+});
+
+describe("reflect: the task's links (enlaces)", () => {
+  const FIGMA = (n) => `https://www.figma.com/design/6NuL9XQpuNnRXfChGBMp1s?node-id=${n}`;
+  const PNG = "https://github.com/o/r/blob/abc/producto/pantallas/ALT-001/alta-1440.png";
+
+  it("[REF-007.5] the prototype goes first, then each screen named by its kind and numbered when several", () => {
+    assert.deepEqual(
+      linksOf({
+        prototype: "https://easy-one.example/alta",
+        screens: [PNG, FIGMA("1-2"), "https://figma.com/proto/x", "https://easy-one.example/pantalla/alta", "https://x.example/a.WEBP"],
+      }),
+      [
+        { nombre: "Prototipo", enlace: "https://easy-one.example/alta" },
+        { nombre: "Captura 1", enlace: PNG },
+        { nombre: "Figma 1", enlace: FIGMA("1-2") },
+        { nombre: "Figma 2", enlace: "https://figma.com/proto/x" },
+        { nombre: "Pantalla", enlace: "https://easy-one.example/pantalla/alta" },
+        { nombre: "Captura 2", enlace: "https://x.example/a.WEBP" },
+      ],
+    );
+    assert.deepEqual(linksOf({ prototype: null, screens: [] }), []);
+  });
+
+  it("[REF-007.5] skips what is not http or https, or longer than gg-ez takes, and a lookalike is not Figma", () => {
+    assert.deepEqual(
+      linksOf({
+        prototype: "javascript:alert(1)",
+        screens: [
+          "producto/pantallas/ALT-001/alta.png",
+          "ftp://x.example/a.png",
+          "mailto:a@b.example",
+          `https://x.example/${"a".repeat(2000)}`,
+          "https://notfigma.com/design/x",
+        ],
+      }),
+      [{ nombre: "Pantalla", enlace: "https://notfigma.com/design/x" }],
+    );
+  });
+
+  it("[REF-007.5] never more than 10: the prototype, then the screens in order", () => {
+    const screens = Array.from({ length: 11 }, (_, i) => FIGMA(`${i}-1`));
+    const links = linksOf({ prototype: "https://easy-one.example/alta", screens });
+    assert.equal(links.length, 10);
+    assert.equal(links[0].nombre, "Prototipo");
+    assert.deepEqual(links.slice(1).map((link) => link.enlace), screens.slice(0, 9));
+    assert.equal(linksOf({ prototype: null, screens }).length, 10);
+  });
+
+  it("[REF-007.5] a link gg-ez would refuse is never sent: control or invisible characters, empty or long names", () => {
+    const link = (nombre) => ({ nombre, enlace: "https://x.example" });
+    assert.equal(validLink(link("Figma")), true);
+    for (const bad of ["", "   ", "Fig\u0007ma", "Fig​ma", "Figma\n2", "a".repeat(61), "‮Figma"]) {
+      assert.equal(validLink(link(bad)), false, JSON.stringify(bad));
+    }
+    assert.equal(validLink({ nombre: "Figma", enlace: "ftp://x.example" }), false);
+    // Control characters inside a screen's address do not reach a name, and the address goes encoded.
+    const links = linksOf({ prototype: null, screens: ["https://x.example/a\u0007b​"] });
+    assert.equal(links.length, 1);
+    assert.ok(links.every(validLink));
+    assert.doesNotMatch(links[0].enlace, /[\u0000-\u001f​]/);
+  });
+
+  it("[REF-007.5] the prototype is the story's `prototype:` key, a single address", () => {
+    assert.equal(prototypeOf(FILE), "https://easy-one.example/alta");
+    assert.equal(prototypeOf("---\nid: X\nprototype: https://p.example/x # the screen\n---\n"), "https://p.example/x");
+    assert.equal(prototypeOf("---\nid: X\nprototype: [https://a.example, https://b.example]\n---\n"), null);
+    assert.equal(prototypeOf("---\nid: X\n---\n"), null);
+    assert.equal(prototypeOf("---\nid: X\nprototype:\n---\n"), null);
+    assert.equal(prototypeOf("no frontmatter\nprototype: https://p.example\n"), null);
+  });
+
+  it("[REF-007.5] with the story files, each piece brings its descripcion and its enlaces", () => {
+    const [piece] = reflectionOf({
+      source: "product",
+      stories: [story("ALT-001", "partial", { screens: [FIGMA("1-2")], criteria: CRITERIA.slice(0, 1) })],
+      activities: [],
+      branches: [],
+      prBranches: [],
+      repo: null,
+      storiesDir: "producto",
+      files: new Map([["ALT-001", FILE]]),
+      labels: LABELS,
+    }).piezas;
+    assert.equal(
+      piece.descripcion,
+      "Como propietario de pyme,\nquiero darme de alta,\npara empezar la prueba.\n\nCriterios de aceptación\n- ALT-001.1 (funciona) Pide el correo.",
+    );
+    assert.deepEqual(piece.enlaces, [
+      { nombre: "Prototipo", enlace: "https://easy-one.example/alta" },
+      { nombre: "Figma", enlace: FIGMA("1-2") },
+    ]);
   });
 });
 

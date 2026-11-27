@@ -115,7 +115,9 @@ Things the validator cannot see. Check them yourself when you write or edit a st
 
 `scripts/reflect.mjs` sends the stories to a gg-ez project as a reflection: each story becomes a task there, found again by its ID, and gg-ez creates, changes and cancels tasks to match. The state comes from the story's status and from git: discarded → Cancelado, works → Hecho, an open PR from a branch with its ID → En revisión, a branch with its ID on origin or partial → En curso, anything else → Por hacer. The activity travels as the group, and the story file on the default branch as the link.
 
-- Run it with `--dry-run` first: it prints how many pieces would go, by state, and sends nothing.
+- The task's description is the story's **Story** section and then its criteria, one line each with its state: funciona, sin verificar, falla or sin construir. The rule goes without its bold ID's asterisks and without its marker.
+- The task's links are the story's `prototype:` frontmatter key first (one http or https address, named «Prototipo»), then each URL in `screens:`: «Figma» for figma.com, «Captura» for a png, jpg or webp, «Pantalla» otherwise, numbered when several share a kind. A path or any other scheme is skipped, and at most 10 go.
+- Run it with `--dry-run` first: it prints how many pieces would go, by state, and how many bring a description and links, and sends nothing.
 - It reflects only the tip of the default branch on origin, with the stories folder clean: from a story branch or a worktree, the next run from the default branch would undo it. `--any-branch` sends anyway.
 - `GGEZ_URL` and `GGEZ_KEY` come from the environment, never from a file or an argument, and no program it runs (git, gh, the project's tests) sees them. The key is generated in gg-ez, once, by an admin of the project.
 - The source is the repository's folder name, or `--source <name>`. It must match the key's source, or gg-ez rejects the reflection.

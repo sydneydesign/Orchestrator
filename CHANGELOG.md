@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.17.0 — 2026-11-27
+
+A reflected task carries what its story says (REF-007 in gg-ez). Until now a task from easy-one opened empty in gg-ez, while its story had the text, the criteria, the Figma frames and the screenshots.
+
+- `reflect.mjs`: each piece brings `descripcion`. It is the story's story section, read from the story file under the project's heading (`stories.config.json` → `labels.sections.story`, «Historia» in easy-one), then the criteria, one line each with its state: funciona, sin verificar, falla or sin construir. The state follows `stories.mjs`: a test by its last result, manual → funciona, and the marker's own state otherwise. Each rule goes without its `**ID**` asterisks and without its marker. The text is plain, cut to 20 000 characters with an ellipsis. A story with neither section nor criteria sends null, which clears the task's description.
+- `reflect.mjs`: each piece brings `enlaces`, at most 10. «Prototipo» comes first, from a new optional frontmatter key `prototype:` (one http or https address). Then each URL in `screens:` goes in order: «Figma» for figma.com, «Captura» for a png, jpg or webp, «Pantalla» otherwise, numbered when several share a kind («Figma 1», «Figma 2»). A path, another scheme or an address over 2000 characters is skipped. `validLink` checks every link against gg-ez's rule before it goes, since one invalid piece makes gg-ez refuse the whole reflection.
+- `--dry-run` also prints how many pieces bring a description and links. On easy-one: 47 pieces, 47 with a description, 26 with links (63 links).
+- `scripts/reflect.test.mjs` has 33 tests: 11 new ones for the description, the states, the links, their limits and the `prototype:` key.
+
 ## 0.16.0 — 2026-11-27
 
 Every session orchestrates, wherever it was opened. The human works in Orca with several tabs at once, one per topic, each in the worktree or branch it needs, and expects each tab to orchestrate. Under 0.13.0 a tab opened in a linked worktree was a worker: the guard kept it from loading the procedure, so it worked with no briefs, reviewer, designer or stories. Before 0.13.0, Orca's worker sessions had the same gap: 15 of Easy One's 16 design-system sessions, from 6 to 23 November, never loaded the procedure.

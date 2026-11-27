@@ -157,7 +157,7 @@ A bug is never a new story: it is a failing marker on the criterion it breaks. A
 
 ### Reflect the stories in gg-ez
 
-A repository's stories can show up in a gg-ez project as tasks, kept up to date: each story is a task, its ID the key, its activity the group, and its state follows the story (discarded → Cancelado, works → Hecho, an open PR from a branch with its ID → En revisión, a branch with its ID or partial → En curso, the rest → Por hacer). From the tip of the default branch, the command reads `stories.mjs --json`, asks git and `gh` for branches and PRs, and posts it with the project's key:
+A repository's stories can show up in a gg-ez project as tasks, kept up to date: each story is a task, its ID the key, its activity the group, its story text and criteria (each with its state) the description, its `prototype:` and `screens:` the links, and its state follows the story (discarded → Cancelado, works → Hecho, an open PR from a branch with its ID → En revisión, a branch with its ID or partial → En curso, the rest → Por hacer). From the tip of the default branch, the command reads `stories.mjs --json`, asks git and `gh` for branches and PRs, and posts it with the project's key:
 
 ```
 node <plugin>/skills/stories/scripts/reflect.mjs [--source <name>] [--tests] [--dry-run] [--any-branch]

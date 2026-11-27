@@ -29,6 +29,14 @@
 // ID → En revisión; a branch with its ID on origin, or partial → En curso; anything else → Por hacer. Each travels
 // as its gg-ez state type and name.
 //
+// A piece: { clave, titulo, tipo, estado, enlace?, grupo?, descripcion, enlaces }. `descripcion` is the story's
+// story section (its heading is stories.config.json → labels.sections.story, «Historia» in Spanish) and then its
+// criteria, one line each with its state (funciona, sin verificar, falla, sin construir), in plain text cut to 20 000
+// characters; null when the story has neither, which clears the task's. `enlaces` is [{ nombre, enlace }], at most 10:
+// «Prototipo» from the story's optional `prototype:` frontmatter key, then each URL in `screens:`, named «Figma»
+// (figma.com), «Captura» (a png, jpg or webp) or «Pantalla», numbered when several share a kind. Only http and https
+// addresses go; anything else is skipped, so gg-ez never refuses the reflection over a link.
+//
 // A project can decide the state itself: if a story in `stories.mjs --json` brings `reflect`, it wins. An object
 // `{ tipo, estado }` goes as it is (tipo: backlog, unstarted, started, completed or canceled); `null` leaves the
 // story out, and gg-ez cancels its task. A `reflect` with another shape stops the run, naming the story.

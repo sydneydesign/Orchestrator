@@ -19,7 +19,7 @@
 // Checks named in git.ignoredChecks are left out. Exit 2: bad arguments. Exit 1: gh failed 3 times in a row.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const MARK = "<!-- orchestrator -->";
@@ -240,6 +240,22 @@ for (;;) {
     if (!file && !ONCE) { console.error("watch-pr: not inside a repository; pass --cursor <file>."); process.exit(2); }
     cur = file ? loadCursor(file) : {};
     cur.reported ??= {}; cur.attempts ??= {}; cur.seen ??= [];
+    // One watcher per PR across every session of the repository: a second one would answer the same
+    // comment or fix the same failure twice. A watcher past its own time limit, or whose process is gone, is stale.
+    if (file && !ONCE) {
+      const lock = file.replace(/\.json$/, "") + ".watcher";
+      let other = null;
+      try { other = JSON.parse(readFileSync(lock, "utf8")); } catch {}
+      const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } };
+      if (other && other.pid !== process.pid && Date.now() < other.until && alive(other.pid)) {
+        print({ pr: snap.pr.number, url: snap.pr.url, events: ["watched-elsewhere"], watcher: other });
+        process.exit(0);
+      }
+      mkdirSync(path.dirname(lock), { recursive: true });
+      if (!opt("--cursor", null) && !existsSync(path.join(path.dirname(lock), ".gitignore"))) writeFileSync(path.join(path.dirname(lock), ".gitignore"), "*\n");
+      writeFileSync(lock, JSON.stringify({ pid: process.pid, since: new Date().toISOString(), until: deadline + 60000 }));
+      process.on("exit", () => { try { if (JSON.parse(readFileSync(lock, "utf8")).pid === process.pid) rmSync(lock); } catch {} });
+    }
   }
   const out = evaluate(snap, cur);
   const timeUp = Date.now() + EVERY > deadline;

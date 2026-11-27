@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.16.0 — 2026-11-27
+
+Every session orchestrates, wherever it was opened. The human works in Orca with several tabs at once, one per topic, each in the worktree or branch it needs, and expects each tab to orchestrate. Under 0.13.0 a tab opened in a linked worktree was a worker: the guard kept it from loading the procedure, so it worked with no briefs, reviewer, designer or stories. Before 0.13.0, Orca's worker sessions had the same gap: 15 of Easy One's 16 design-system sessions, from 6 to 23 November, never loaded the procedure.
+
+- The worker role is gone. Every main session gets the same session start and loads `orchestrate`. The start says where the session opened, the path of the shared ledger, and the worktrees other sessions hold. Role agents are unchanged.
+- The ledger moves out of git, to `<git common dir>/orchestrator/state.md`. Every worktree reads and writes the same file, and branches no longer carry diverging copies. The first session start copies the tracked `.orchestrator/state.md` there and asks for the tracked file's removal. Each session keeps its own section.
+- `scripts/sessions.mjs` keeps claims in `<git common dir>/orchestrator/claims.json`. The guard claims a linked worktree for the session that first edits a file or runs a changing git command there (commit, merge, switch, add and the like). Another live session doing the same there is blocked, with the holder's branch and last activity. A claim ends with its session (a new `SessionEnd` hook), or after 2 hours without activity. `sessions.mjs release <folder>` ends one early, and the guard asks the human to confirm it. The main checkout is never claimed. Role agents neither claim nor are held, so an Orca builder terminal and its orchestrator share a worktree. Notes under `.orchestrator/work/` claim nothing.
+- Nobody switches the main checkout off a protected branch: the guard now blocks every session, where it asked the orchestrator before. `gh pr checkout` there is blocked too. Merges into main still need the human's click.
+- `tidy.mjs` tidies from the main checkout, from any worktree. It reads the shared ledger, and keeps every worktree a live session holds.
+- `watch-pr.mjs` keeps one watcher per PR across sessions. A second one exits with `watched-elsewhere`.
+- The skill (§1.1 **Other sessions**, §6.3) creates every block's worktree under the main checkout's `.claude/worktrees/`, from any session. A session opened in a linked worktree on its own branch works there.
+- `hooks/check-guard.mjs` has 316 cases: the worker cases now expect an orchestrator, and new cases cover claims, the role exemption, release and session end.
+
 ## 0.15.0 — 2026-11-26
 
 A board can show each story's design phase instead of its test status. easy-one needs it: there, `ready/` (accepted) and `lock/` (screen approved) are what mark progress, and the project itself changes nothing.

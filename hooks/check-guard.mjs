@@ -29,6 +29,9 @@ execFileSync("git", ["worktree", "add", "-q", dirs.worktree, "-b", "sydneydesign
 // The main checkout declares a worktree setup, so a worker in a worktree nobody set up is told to run it.
 writeFileSync(path.join(dirs.main, ".orchestrator.json"), JSON.stringify({ git: { protectedBranches: ["main"] }, worktree: { setup: ["true"] } }));
 writeFileSync(path.join(dirs.main, ".orchestrator", "worktree.mjs"), "// fixture\n");
+// A second linked worktree only the claim cases use, so earlier cases' claims do not reach it.
+dirs.claimed = path.join(base, "claimed");
+execFileSync("git", ["worktree", "add", "-q", dirs.claimed, "-b", "sydneydesign/claims"], { cwd: dirs.main, stdio: "ignore" });
 dirs.moved = repo("moved");
 execFileSync("git", ["switch", "-q", "-c", "explora/x"], { cwd: dirs.moved, stdio: "ignore" });
 // A branch that exists only on a remote: git checkout <name> would create it and switch.
@@ -231,25 +234,25 @@ const cases = [
   ["story/x","builder: gh browse is allowed","gh browse","orchestrator:builder",0,""],
   ["story/x","builder: gh status is allowed","gh status","orchestrator:builder",0,""],
   ["story/x","orchestrator: a comment body \"-a\" is not an approval","gh pr review 5 --comment -b \"-a\"","",0,""],
-  ["main","session start in the main checkout: orchestrator","","",0,"You are the orchestrator","SessionStart"],
-  ["worktree","session start in a linked worktree: worker","","",0,"you are a worker here","SessionStart"],
+  ["main","session start in the main checkout: orchestrator","","",0,"You are an orchestrator","SessionStart"],
+  ["worktree","session start in a linked worktree: an orchestrator too","","",0,"opened in the linked worktree","SessionStart"],
   ["moved","session start when the main checkout is off main says so","","",0,"The main checkout is on explora/x","SessionStart"],
-  ["worktree","a worker cannot load the orchestrator's skill","orchestrator:orchestrate","",2,"you are a worker","Skill"],
+  ["worktree","a session in a linked worktree loads the skill","orchestrator:orchestrate","",0,"","Skill"],
   ["main","the orchestrator loads its skill in the main checkout","orchestrator:orchestrate","",0,"","Skill"],
-  ["main","orchestrator: switching the main checkout asks","git switch -c explora/botones","",0,"main checkout stays on main"],
-  ["main","orchestrator: checkout of a branch in the main checkout asks","git checkout story/y","",0,"main checkout stays on main"],
+  ["main","orchestrator: switching the main checkout is blocked","git switch -c explora/botones","",2,"main checkout stays on main"],
+  ["main","orchestrator: checkout of a branch in the main checkout is blocked","git checkout story/y","",2,"main checkout stays on main"],
   ["main","builder: switching the main checkout is blocked","git switch story/y","orchestrator:builder",2,"main checkout stays on main"],
   ["main","checkout of a file in the main checkout passes","git checkout -- README.md","",0,""],
-  ["worktree","switching inside a linked worktree passes","git switch -c sydneydesign/other","",0,""],
+  ["worktree","switching inside a linked worktree passes","git switch -c sydneydesign/other","",0,"","Bash","wt-owner"],
   ["main","orchestrator: fetch . x:main asks","git fetch . story/y:main","",0,"moves a protected branch"],
   ["main","orchestrator: push . x:main asks","git push . story/y:main","",0,"moves a protected branch"],
   ["main","orchestrator: branch -f main asks","git branch -f main story/y","",0,"moves a protected branch"],
   ["main","orchestrator: update-ref main asks","git update-ref refs/heads/main story/y","",0,"moves a protected branch"],
   ["story/x","builder: fetch . x:main is blocked","git fetch . story/x:main","orchestrator:builder",2,"never move a protected branch"],
   ["main","fetch origin is not a move","git fetch origin","",0,""],
-  ["main","orchestrator: checkout - in the main checkout asks","git checkout -","",0,"main checkout stays on main"],
-  ["main","orchestrator: checkout story/y -- asks","git checkout story/y --","",0,"main checkout stays on main"],
-  ["main","orchestrator: checkout -qb asks","git checkout -qb explora/z","",0,"main checkout stays on main"],
+  ["main","orchestrator: checkout - in the main checkout is blocked","git checkout -","",2,"main checkout stays on main"],
+  ["main","orchestrator: checkout story/y -- is blocked","git checkout story/y --","",2,"main checkout stays on main"],
+  ["main","orchestrator: checkout -qb is blocked","git checkout -qb explora/z","",2,"main checkout stays on main"],
   ["main","builder: branch -M onto main is blocked","git branch -M story/y main","orchestrator:builder",2,"never move a protected branch"],
   ["main","orchestrator: branch -C onto main asks","git branch -C story/y main","",0,"moves a protected branch"],
   ["main","orchestrator: renaming main away asks","git branch -m main old-main","",0,"moves a protected branch"],
@@ -259,26 +262,26 @@ const cases = [
   ["story/x","builder: branch -f story/y main is allowed","git branch -f story/y main","orchestrator:builder",0,""],
   ["story/x","builder: update-ref of its own branch to main is allowed","git update-ref refs/heads/story/y main","orchestrator:builder",0,""],
   ["main","orchestrator: push origin main passes","git push origin main","",0,""],
-  ["main","the orchestrator starts in the main checkout","","",0,"You are the orchestrator","SessionStart","orch"],
-  ["worktree","after EnterWorktree, a compaction keeps it the orchestrator","","",0,"You are the orchestrator","SessionStart","orch"],
+  ["main","the orchestrator starts in the main checkout","","",0,"You are an orchestrator","SessionStart","orch"],
+  ["worktree","after EnterWorktree, a compaction keeps it the orchestrator","","",0,"You are an orchestrator","SessionStart","orch"],
   ["worktree","after EnterWorktree, it may reload its skill","orchestrator:orchestrate","",0,"","Skill","orch"],
   ["main","builder: update-ref -m onto main is blocked","git update-ref -m ff refs/heads/main story/y","orchestrator:builder",2,"never move a protected branch"],
   ["main","orchestrator: update-ref --stdin asks","git update-ref --stdin","",0,"moves a protected branch"],
   ["main","builder: reset --soft <commit> -- on main is blocked","git reset --soft story/y --","orchestrator:builder",2,"never move a protected branch"],
-  ["main","orchestrator: gh pr checkout in the main checkout asks","gh pr checkout 12","",0,"main checkout stays on main"],
+  ["main","orchestrator: gh pr checkout in the main checkout is blocked","gh pr checkout 12","",2,"main checkout stays on main"],
   ["main","orchestrator: git reset HEAD on main passes","git reset HEAD","",0,""],
   ["main","orchestrator: git switch main on main passes","git switch main","",0,""],
   ["main","orchestrator: push HEAD:main from main passes","git push origin HEAD:main","",0,""],
-  ["main","a second session in the main checkout starts","","",0,"You are the orchestrator","SessionStart","second"],
-  ["worktree","the first orchestrator still compacts as orchestrator","","",0,"You are the orchestrator","SessionStart","orch"],
-  ["main","the orchestrator starts again in the main checkout","","",0,"You are the orchestrator","SessionStart","orch2"],
+  ["main","a second session in the main checkout starts","","",0,"You are an orchestrator","SessionStart","second"],
+  ["worktree","the first orchestrator still compacts as orchestrator","","",0,"You are an orchestrator","SessionStart","orch"],
+  ["main","the orchestrator starts again in the main checkout","","",0,"You are an orchestrator","SessionStart","orch2"],
   ["main","it enters the block's worktree","worktree","",0,"","EnterWorktree","orch2"],
-  ["worktree","a /clear there keeps it the orchestrator","","",0,"You are the orchestrator","SessionStart:clear","fresh-after-clear"],
-  ["worktree","a session opened fresh there is a worker","","",0,"you are a worker here","SessionStart:startup","opened-by-hand"],
+  ["worktree","a /clear there keeps it the orchestrator","","",0,"You are an orchestrator","SessionStart:clear","fresh-after-clear"],
+  ["worktree","a session opened fresh there is an orchestrator","","",0,"You are an orchestrator","SessionStart:startup","opened-by-hand"],
   ["main","orchestrator: push origin :main asks","git push origin :main","",0,"moves a protected branch"],
   ["main","orchestrator: push --delete main asks","git push origin --delete main","",0,"moves a protected branch"],
   ["main","builder: update-ref HEAD on main is blocked","git update-ref HEAD story/y","orchestrator:builder",2,"never move a protected branch"],
-  ["worktree","worker: merging in the main checkout is blocked","MAINDIR","",2,"is blocked","Bash","worker-1"],
+  ["worktree","a session in a worktree merging into main asks","MAINDIR","",0,"\"ask\"","Bash","worker-1"],
   ["main","orchestrator: checkout -p is not a switch","git checkout -p story/y","",0,""],
   ["main","orchestrator: push HEAD:refs/heads/main from main passes","git push origin HEAD:refs/heads/main","",0,""],
   ["main","builder: checkout of a remote-only branch is blocked","git checkout pr-branch","orchestrator:builder",2,"main checkout stays on main"],
@@ -287,22 +290,37 @@ const cases = [
   ["main","builder: bisect start with revisions is blocked","git bisect start HEAD HEAD~1","orchestrator:builder",2,"main checkout stays on main"],
   ["main","reading symbolic-ref HEAD passes","git symbolic-ref HEAD","orchestrator:builder",0,""],
   ["main","builder: branch -D main is blocked","git branch -D main","orchestrator:builder",2,"never move a protected branch"],
-  ["worktree","a worker opened by hand","","",0,"you are a worker here","SessionStart:startup","w-compact"],
-  ["worktree","stays a worker after its compaction","","",0,"you are a worker here","SessionStart:compact","w-compact"],
-  ["worktree","worker: gh pr merge is blocked","gh pr merge 5","",2,"worker session never merges","Bash","w-compact"],
-  ["worktree","a worker after its /clear is still a worker","","",0,"you are a worker here","SessionStart:clear","w-clear"],
+  ["worktree","a session opened by hand in a worktree","","",0,"You are an orchestrator","SessionStart:startup","w-compact"],
+  ["worktree","stays an orchestrator after its compaction","","",0,"You are an orchestrator","SessionStart:compact","w-compact"],
+  ["worktree","gh pr merge from a worktree asks","gh pr merge 5","",0,"\"ask\"","Bash","w-compact"],
+  ["worktree","after its /clear it is still an orchestrator","","",0,"You are an orchestrator","SessionStart:clear","w-clear"],
   ["main","builder: checkout -bname attached is blocked","git checkout -bexplora/x","orchestrator:builder",2,"main checkout stays on main"],
   ["main","builder: checkout --orphan=name is blocked","git checkout --orphan=explora/y","orchestrator:builder",2,"main checkout stays on main"],
   ["main","builder: fetch with a glob onto refs/heads is blocked","git fetch origin '+refs/heads/*:refs/heads/*'","orchestrator:builder",2,"never move a protected branch"],
-  ["worktree","worker: switch -C main in its worktree is blocked","git switch -C main story/y --ignore-other-worktrees","",2,"","Bash","w-c2"],
-  ["worktree","worker: committing in a moved main checkout is blocked","MOVEDCOMMIT","",2,"never changes the main checkout","Bash","w-c3"],
+  ["worktree","switch -C main in a worktree asks: it moves main","git switch -C main story/y --ignore-other-worktrees","",0,"moves a protected branch","Bash","wt-owner"],
+  ["worktree","committing in a main checkout already off main passes","MOVEDCOMMIT","",0,"","Bash","w-c3"],
   ["main","designer: a python heredoc with a quoted > passes","python3 - <<'EOF'\nprint(\"<p>{a}: b</p>\")\nEOF","orchestrator:designer",0,""],
   ["story/x","a python heredoc that runs git push --force asks","python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['git','push','--force'])\nEOF","",0,"\"ask\""],
   ["main","researcher: a loop variable in a target is blocked (write the full path)","LOOPTMP","orchestrator:researcher",2,"write the full path"],
   ["main","researcher: a loop over a path list is still blocked","LOOPCLIMB","orchestrator:researcher",2,"write the full path"],
   ["main","known false block: a quoted folder glued to a glob is read as two words","GLUEDGLOB","orchestrator:designer",2,""],
   ["main","a session in a symlinked folder still protects locked tests","rm tests/a.test.js","",2,"locked","Bash","symlinked"],
-  ["worktree","a worker in a worktree nobody set up is told to run setup","","",0,"has not been set up","SessionStart:startup","w-setup"],
+  ["worktree","a session in a worktree nobody set up is told to run setup","","",0,"has not been set up","SessionStart:startup","w-setup"],
+  ["claimed","the first session that edits a worktree claims it","x.txt","",0,"","Write","s-a"],
+  ["claimed","another session editing there is blocked","x.txt","",2,"belongs to another session","Write","s-b"],
+  ["claimed","a role agent of the first session edits there","x.txt","orchestrator:builder",0,"","Write","s-a"],
+  ["claimed","a builder in its own Orca session edits there","x.txt","orchestrator:builder",0,"","Write","s-orca"],
+  ["claimed","another session committing there is blocked","git commit -m x","",2,"belongs to another session","Bash","s-b"],
+  ["claimed","another session reading git there passes","git status","",0,"","Bash","s-b"],
+  ["claimed","another session writing a report in the work folder passes",".orchestrator/work/x/r.md","",0,"","Write","s-b"],
+  ["main","session start names the worktree another session holds","","",0,"Other sessions work now in","SessionStart","s-c"],
+  ["main","session start names the shared ledger","","",0,"shared ledger is","SessionStart","s-c"],
+  ["claimed","releasing a worktree asks the human","node sessions.mjs release .","",0,"\"ask\"","Bash","s-b"],
+  ["claimed","a role agent cannot release a worktree","node sessions.mjs release .","orchestrator:builder",2,"never release","Bash","s-b"],
+  ["claimed","the first session ends","","",0,"","SessionEnd","s-a"],
+  ["claimed","then another session edits there","x.txt","",0,"","Write","s-b"],
+  ["main","editing in the main checkout claims nothing","y.txt","",0,"","Write","s-a"],
+  ["main","another session edits the main checkout too","y.txt","",0,"","Write","s-d"],
   ["main","researcher: ${z:-..} in a target is blocked","TPL1","orchestrator:researcher",2,"read-only"],
   ["main","researcher: $1 in a target is blocked","TPL2","orchestrator:researcher",2,"read-only"],
   ["main","researcher: a loop name reassigned in the body is blocked","TPL3","orchestrator:researcher",2,"read-only"],
@@ -362,6 +380,7 @@ for (let [branch, title, command, agent, exit, msg, tool = "Bash", session = `t$
   if (command === "MOVEDCOMMIT") command = `git -C "${dirs.moved}" commit -m x`;
   // tool "SessionStart" sends that event; tool "Skill" loads the skill named in command.
   const event = tool === "SessionStart" ? { hook_event_name: "SessionStart" }
+    : tool === "SessionEnd" ? { hook_event_name: "SessionEnd", reason: "exit" }
     : tool === "EnterWorktree" ? { hook_event_name: "PreToolUse", tool_name: "EnterWorktree", tool_input: { path: dirs[command] } }
     : tool.startsWith("SessionStart:") ? { hook_event_name: "SessionStart", source: tool.slice(13) }
     : tool === "Write" ? { hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: path.resolve(dirs[branch], command), content: "x" } }
@@ -377,7 +396,7 @@ for (let [branch, title, command, agent, exit, msg, tool = "Bash", session = `t$
   const out = r.stderr + r.stdout;
   const ok = r.status === exit && (msg ? out.includes(msg) : !out.includes('"ask"'));
   if (!ok) fail++;
-  console.log(`${ok ? "ok  " : "FAIL"} ${title}  (exit ${r.status}, want ${exit})${ok ? "" : "  " + (r.stderr + r.stdout).slice(0, 160).replace(/\n/g, " ")}`);
+  console.log(`${ok ? "ok  " : "FAIL"} ${title}  (exit ${r.status}, want ${exit})${ok && !process.env.VERBOSE ? "" : "  " + (r.stderr + r.stdout).slice(0, 160).replace(/\n/g, " ")}`);
 }
 rmSync(base, { recursive: true, force: true });
 console.log(fail ? `${fail} of ${cases.length} failed` : `all ${cases.length} passed`);

@@ -57,6 +57,7 @@ When it exits, act on each event, then start it again, until `merged` or `closed
 | `conflict` | Merge the base in yourself, where the story branch is checked out: the block's worktree, where your session is, in the live profile; in the isolated profile, the builder's worktree, with `git -C <worktree path>` (your checkout cannot switch to a branch a worktree holds). `git fetch`, then `git merge origin/<base>`. Never rebase. A resolution that changes behaviour goes to a builder with a fix brief. Run `verify.onBuilderStop`, commit, push. |
 | `comments` | See **Comments** below. |
 | `behind` | The base moved and the project requires an up-to-date branch. Merge the base in as for `conflict`, then run `verify.onBuilderStop`, commit and push. |
+| `watched-elsewhere` | Another session already watches this PR. Leave it to that session, and remove the PR from your section of the ledger. |
 | `ready` | Tell the human in one line, with the PR link, that it is ready to merge. When they ask, merge with `gh pr merge <n> --merge`, or the method in `git.mergeMethod`. |
 | `escalate` | One issue has failed on three pushes in a row. Stop pushing for it, and tell the human what failed and what each push tried. |
 | `merged` | Update the ledger. The close's tidy removes the local branch. |

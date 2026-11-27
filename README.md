@@ -30,19 +30,19 @@ An agent that writes code, judges its own work and reports its own progress tend
 ## How it works
 
 ```
- human ──► orchestrator (main session) ──► builder ──► reviewer ──► orchestrator ──► human
+ human ──► orchestrator (any main session) ► builder ──► reviewer ──► orchestrator ──► human
               │  plans, briefs, decides       │ tests first   │ judges the       │ accepts
               │  merges, keeps the ledger     │ then code     │ diff vs story    │
               ▼                               ▼               ▼
-        .orchestrator/state.md         locked tests     review report
+        shared ledger                  locked tests     review report
 ```
 
-1. **The main session is the orchestrator.** It owns the plan, the decisions and the merge. It decides by itself when to delegate, and it is the only voice the human hears.
+1. **Every main session is an orchestrator.** It owns the plan, the decisions and the merge. It decides by itself when to delegate, and it is the only voice the human hears.
 2. **Role agents do the work.** They run as Claude Code subagents. Each one gets a written brief and returns a report file.
 3. **Every story follows one flow.** Ready check, then a branch. The builder writes the acceptance tests first, watches them fail, and makes them pass. The orchestrator locks the tests. One independent review follows, then at most one fix round, then the human's acceptance.
 4. **The guard enforces the rules that matter most.** It is a hook, so it applies whatever an agent's prompt says.
 
-There is one orchestrator per repository: the session in the main checkout. A session you open in a linked worktree (by hand, or a tab Orca opens) starts as a worker on that worktree's branch. The main checkout stays on the main branch, because you merge from it: the orchestrator runs its blocks in a worktree it enters.
+Open a session wherever you like: the main checkout or any linked worktree (by hand, or a tab Orca opens). Each one orchestrates its own topic, with the same procedure. The sessions share one ledger, kept in the repository's common git folder, outside every branch. The guard claims a worktree for the session that first edits or commits there, so two sessions never work in one folder. The main checkout stays on the main branch, because you merge from it: sessions run their blocks in worktrees.
 
 The plugin does nothing in a project without `.orchestrator.json`. In a project that has one, a session-start hook tells the main session to load the `orchestrate` skill.
 
@@ -102,7 +102,7 @@ It writes:
 | `<storiesDir>/` | The story folder in the project's language, the `stories.mjs` validator, templates and the generated map |
 | `.claude/agents/` | Project roles, when the project needs them |
 | `CLAUDE.md` | A short orchestrator block, and an empty **Lessons** section |
-| `.orchestrator/` | The ledger (`state.md`) and the list of locked tests |
+| `.orchestrator/` | The list of locked tests. The ledger lives in `<git common dir>/orchestrator/state.md`, shared by every worktree |
 
 The install ends by proving each piece on this machine: every command runs, the validator passes, the guard blocks a force push, and a real subagent is held to its read-only role. Each check is reported as ✅ working, ⚠️ not verified (with the manual step), or ❌ failed.
 
@@ -121,9 +121,9 @@ For visual work you want to iterate on quickly, ask for **exploration**. The orc
 
 When you ask for a push, the orchestrator opens one pull request per story and looks after it until it is merged or closed. The title is the story ID and what a person notices. The body says what changed, shows before and after screenshots for visible changes, and gives honest evidence: who checked what and how, what nobody could check, each criterion's state, the commands that passed and the reviewers' verdicts. The screenshots go to a `pr-assets` branch that is never merged, so they stay out of the main branch. `watch-pr.mjs` watches the PR in the background and wakes the orchestrator for a failing check, a conflict, a new comment, or when the PR is ready to merge. Fixes go through a builder on the same branch. After three failed pushes for one issue, a redesign asked in review, or an open security point, the orchestrator stops and asks you. The guard asks you before every merge and every approval, and role agents only read GitHub.
 
-At the end of a block of work the orchestrator runs the full verification, writes lessons from real failures into `CLAUDE.md`, and cleans up without being asked: it stops its agents, keeps `state.md` to the current state, and runs `tidy.mjs`. Then it gives you one batched list: bad news first, decisions it made, and branches waiting to be pushed or merged.
+At the end of a block of work the orchestrator runs the full verification, writes lessons from real failures into `CLAUDE.md`, and cleans up without being asked: it stops its agents, keeps its section of the ledger to the current state, and runs `tidy.mjs`. Then it gives you one batched list: bad news first, decisions it made, and branches waiting to be pushed or merged.
 
-`tidy.mjs` shows a preview, then deletes the work folders of closed blocks, local branches already merged into the main branch (with their clean worktrees), and the caches you list in `tidy.caches`. It keeps a work folder that any file in the repository (a doc, a project skill, a new story not yet committed) or `state.md` still names, a branch that never had commits of its own, a branch its upstream lacks, a worktree with uncommitted changes or with reports in its own work folder, and any tracked file. Pass `--keep <folder or branch>` for work still in progress. If a close was skipped, the next session starts with one line saying what was left behind.
+`tidy.mjs` shows a preview, then deletes the work folders of closed blocks, local branches already merged into the main branch (with their clean worktrees), and the caches you list in `tidy.caches`. It keeps a work folder that any file in the repository (a doc, a project skill, a new story not yet committed) or the ledger still names, a worktree another session holds, a branch that never had commits of its own, a branch its upstream lacks, a worktree with uncommitted changes or with reports in its own work folder, and any tracked file. Pass `--keep <folder or branch>` for work still in progress. If a close was skipped, the next session starts with one line saying what was left behind.
 
 ## Stories
 
@@ -199,8 +199,9 @@ A project's `CLAUDE.md` can adjust the process. For example, a prototype with de
 `hooks/guard.mjs` runs on session start, before shell commands and file edits, and when an agent stops. It blocks:
 
 - commits, rebases and cherry-picks on protected branches, and merges there by role agents;
-- a role agent switching the main checkout off the main branch, or moving a protected branch without a checkout (`git fetch . x:main`); the orchestrator is asked instead;
-- a session in a linked worktree loading the orchestrator's procedure;
+- any session switching the main checkout off the main branch;
+- a role agent moving a protected branch without a checkout (`git fetch . x:main`); an orchestrator is asked instead;
+- a session editing or committing in a linked worktree that another live session holds;
 - force pushes, `--no-verify`, `HUSKY=0`, and changes to `core.hooksPath`;
 - broad `git add` and `commit -a`, and a branch switch and a commit in one command;
 - `reset --hard`, `clean -f`, and `checkout .` / `restore .`;
@@ -250,6 +251,8 @@ These are a starting set. The orchestrator creates a project role when a job nee
 ## Upgrading
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the changes in each version. After an update, restart the CLI.
+
+**From 0.15.0 to 0.16.0.** Nothing to change by hand. The first session start copies the tracked `.orchestrator/state.md` into the shared ledger; remove the tracked file with `git rm` in the next block's branch. A project rule that only the main checkout's session orchestrates can go. Restart every open session, so it loads the new guard and its session-end hook.
 
 **From 0.13.1 to 0.13.2.** Nothing to change. No code changed: the guard's scope is now written down (`harness.md` → **What the guard is for**).
 

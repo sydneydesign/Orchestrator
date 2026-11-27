@@ -12,7 +12,7 @@ The harness decides **how** you delegate, not whether. Every judgement in the `o
 | Blocking question | `NEEDS_CONTEXT` in its report → `SendMessage` to the agent id |
 | Role rules in the guard | from `agent_type` |
 
-Separate sessions run only if the human starts them. They carry no role, so the guard treats them as an orchestrator. Coordinate with them through `.orchestrator/work/` and cross-session messages. A message lasts as long as its session; the branch and the files are the durable record.
+Separate sessions run only if the human starts them. They carry no role, so each one is an orchestrator, in the main checkout or in any worktree (skill §1.1). Coordinate with them through the shared ledger, `.orchestrator/work/` and cross-session messages. A message lasts as long as its session; the branch and the files are the durable record.
 
 ## Two profiles
 
@@ -81,7 +81,8 @@ None of these needs a rule in any text. When a lesson's failure is on this list,
   It asks the human before:
   - every push when `git.allowPush` is `false`;
   - every merge into a protected branch by the orchestrator, and a pull there that is not `--ff-only` or that names a source;
-  - switching the main checkout off a protected branch, and moving a protected branch without a checkout (`git fetch . x:main`, `git push . x:main`, `git branch -f`, `git update-ref`); role agents are blocked from both;
+  - switching the main checkout off a protected branch, for every session; moving a protected branch without a checkout (`git fetch . x:main`, `git push . x:main`, `git branch -f`, `git update-ref`), which role agents are blocked from and an orchestrator confirms with the human;
+  - editing or committing in a linked worktree another live session holds (`scripts/sessions.mjs`);
   - every merge or approval of a pull request by the orchestrator, through `gh pr` or `gh api`, a branch moved or deleted through `gh api`, and a `gh api` write whose payload is in a file;
   - an inline script (`node -e`, `python -c`, a heredoc) that mentions git and starts a program.
 

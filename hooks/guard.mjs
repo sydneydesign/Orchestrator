@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFil
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ago, claim, ledgerPath, liveClaims, release } from "../skills/orchestrate/scripts/sessions.mjs";
 
 const WIN = process.platform === "win32";
 // Windows and a default macOS volume (APFS) ignore case: Tests/a.test.js and tests/a.test.js are one file.
@@ -111,14 +112,24 @@ function mainCheckout(dir) {
     return p ? realpathIf(p) : null;
   } catch { return null; }
 }
-// A role agent, or a worker: a session launched in a linked worktree (by hand, or a tab Orca opened). Neither
-// touches the main checkout or a protected branch; the orchestrator is asked instead. Where a session was launched
-// is CLAUDE_PROJECT_DIR: it stays the main checkout after the orchestrator enters a block's worktree
-// (EnterWorktree), through compactions, resumes and /clear (tested with Claude Code 2.1.332).
-const launchDir = process.env.CLAUDE_PROJECT_DIR || cwd;
-let workerMemo;
-const isWorker = () => (workerMemo ??= Boolean(mainCheckout(launchDir) && !isMainCheckout(launchDir)));
-const restricted = () => inSubagent || isWorker();
+// Every main session is an orchestrator, wherever it was opened: the main checkout or any linked worktree.
+// Only role agents (subagents) are restricted. Sessions share the ledger and claim the worktrees they work in
+// (sessions.mjs). (0.16.0. From 0.13.0 a session opened in a linked worktree was a worker that could not load
+// the procedure; the human opens a tab in any worktree and expects it to orchestrate.)
+const restricted = () => inSubagent;
+const session = String(input.session_id ?? "");
+const SESSIONS = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "skills", "orchestrate", "scripts", "sessions.mjs");
+// A session works in a linked worktree only while no other live session holds it. Subagents carry their
+// session's id, so a session's own agents share its claim. The main checkout is never claimed.
+function claimHere(dir, what) {
+  // Role agents work where their orchestrator sends them, an Orca builder terminal included (its own session):
+  // they neither claim a worktree nor are held by a claim. Their orchestrator answers for the folder.
+  if (inSubagent || !session || isMainCheckout(dir)) return;
+  const top = toplevel(dir);
+  if (!top || !mainCheckout(dir)) return;
+  const other = claim(realpathIf(top), session, currentBranch(top));
+  if (other) block(`${top} (on ${other.branch ?? "a detached HEAD"}) belongs to another session, active ${ago(other.at)}. ${what} there would mix two sessions' work in one folder: work in your own worktree. If the human says that session is finished, run \`node "${SESSIONS}" release "${top}"\`; they confirm it.`);
+}
 // Runs before realish is defined (SessionStart), so it resolves links on its own.
 function realpathIf(p) { try { return realpathSync(p); } catch { return p; } }
 function isMainCheckout(dir) { const t = toplevel(dir), m = mainCheckout(dir); return Boolean(t && m && realpathIf(t) === m); }
@@ -153,14 +164,15 @@ if (input.hook_event_name === "SessionStart") {
     debt = execFileSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "skills", "orchestrate", "scripts", "tidy.mjs"), "--summary"],
       { cwd: root, stdio: ["ignore", "pipe", "ignore"], timeout: 8000 }).toString().trim();
   } catch {}
-  // One orchestrator per repository: the session in the main checkout. A session opened in a linked worktree
-  // (by hand, or a tab Orca opened) is a worker on that worktree's branch.
-  // (Easy One, 2026-11-26: a session Sydney opened in an Orca worktree loaded the orchestrator's procedure too.)
+  // Every session orchestrates, wherever it was opened. They share one ledger outside every branch and claim
+  // the worktrees they work in. (Easy One, 2026-11-26: three sessions acted on one folder; 2026-11-27: the
+  // human wants every tab, in any worktree, to orchestrate.)
   const main = mainCheckout(cwd);
-  if (isWorker()) {
+  const inLinked = Boolean(main && !isMainCheckout(cwd));
+  let unset = "";
+  if (inLinked) {
     // A worktree opened by hand (an Orca tab) skipped the project's setup: say so first.
     // (Easy One, 2026-11-26: a designer in such a worktree reached for the main checkout's node_modules.)
-    let unset = "";
     try {
       const mc = JSON.parse(stripBom(readFileSync(path.join(main, `${STATE}.json`), "utf8")));
       const gitDir = path.resolve(cwd, execFileSync("git", ["rev-parse", "--git-dir"], { cwd, stdio: ["ignore", "pipe", "ignore"] }).toString().trim());
@@ -174,15 +186,29 @@ if (input.hook_event_name === "SessionStart") {
       if (([].concat(mc.worktree?.setup ?? [], mc.worktree?.copy ?? []).length || existsSync(path.join(main, ".worktreeinclude"))) && !byHook && !copiedThere && existsSync(script) && !existsSync(path.join(gitDir, "orchestrator-setup")))
         unset = ` This worktree has not been set up: before anything else, run \`node "${script}" setup "${toplevel(cwd) ?? cwd}"\` and wait for it to finish.`;
     } catch {}
-    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart",
-      additionalContext: `This project uses orchestrator, and its orchestrator is the session in the main checkout (${main}). This session runs in a linked worktree on its own branch: you are a worker here, not the orchestrator. Do not load the orchestrator:orchestrate skill. Work and commit on this worktree's branch only; never switch, commit in or merge into the main checkout. The human merges your branch through the orchestrator.` + unset } }));
-    process.exit(0);
   }
   const b = main ? currentBranch(main) : null;
   const off = b && !protectedBranches.includes(b)
-    ? ` The main checkout is on ${b}, not ${protectedBranches[0]}: the human merges from this folder, so switch it back to ${protectedBranches[0]} once that branch's work is safe, and run blocks in a worktree.` : "";
+    ? ` The main checkout is on ${b}, not ${protectedBranches[0]}: the human merges from that folder, so switch it back to ${protectedBranches[0]} once that branch's work is safe.` : "";
+  const ledger = ledgerPath(cwd, main, STATE);
+  // Before 0.16.0 the ledger was tracked in git, one copy per branch. Its content now lives in the shared ledger.
+  const legacy = main && existsSync(path.join(main, STATE, "state.md")) ? ` The tracked ${STATE}/state.md is the ledger from before 0.16.0: its content is in the shared ledger now. Remove it from git (git rm) in your next block's branch, and never write to it again.` : "";
+  const where = inLinked
+    ? ` This session opened in the linked worktree ${toplevel(cwd) ?? cwd}, on ${currentBranch(cwd) ?? "a detached HEAD"}: work for this session's topic happens here, on this branch.`
+    : main ? ` This session opened in the main checkout (${main}). It stays on ${protectedBranches[0]}: run each block in a worktree under ${path.join(main, ".claude", "worktrees")}.` : "";
+  const others = Object.values(main ? liveClaims(main) : {}).filter((c) => c.session !== session);
+  const busy = others.length ? ` Other sessions work now in: ${others.map((c) => `${c.folder} (${c.branch ?? "detached"}, active ${ago(c.at)})`).join("; ")}. Leave those folders and branches to them.` : "";
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart",
-    additionalContext: "This project uses orchestrator. You are the orchestrator: load the orchestrator:orchestrate skill before any work and follow it. Delegate through the Agent tool (references/harness.md)." + off + (debt ? ` ${debt}` : "") } }));
+    additionalContext: "This project uses orchestrator. You are an orchestrator: load the orchestrator:orchestrate skill before any work and follow it. Delegate through the Agent tool (references/harness.md). Other sessions may orchestrate this repository at the same time, each on its own topic."
+      + (ledger ? ` The shared ledger is ${ledger}: read it, and keep your own section current.` : "")
+      + where + busy + off + legacy + unset + (debt ? ` ${debt}` : "") } }));
+  process.exit(0);
+}
+
+// ---------- SessionEnd: the session's worktrees are free again
+
+if (input.hook_event_name === "SessionEnd") {
+  if (session && !inSubagent) release(cwd, { session });
   process.exit(0);
 }
 
@@ -190,9 +216,6 @@ if (input.hook_event_name === "SessionStart") {
 
 if (input.hook_event_name === "PreToolUse" && input.tool_name === "Skill" && /(^|:)orchestrate$/.test(String(input.tool_input?.skill ?? ""))) {
   if (inSubagent) block(`you are ${agentType}, not the orchestrator. Follow your brief; report NEEDS_CONTEXT when it does not cover something.`);
-  // A session that started in a linked worktree is a worker. The orchestrator itself may move into one later
-  // (EnterWorktree), after it loaded the skill in the main checkout.
-  if (isWorker()) block(`the orchestrator is the session in the main checkout (${mainCheckout(cwd)}). This session was launched in a linked worktree: you are a worker on its branch.`);
 }
 
 // ---------- PreToolUse: file edits
@@ -230,6 +253,8 @@ if (input.hook_event_name === "PreToolUse" && ["Edit", "Write", "MultiEdit", "No
     const base = toplevel(path.dirname(abs)) ?? toplevel(path.dirname(realish(abs))) ?? root;
     checkFileWrite(relTo(realish(base), abs), abs);
   }
+  // Reports and briefs under the work folder are notes, not the worktree's code: they claim nothing.
+  if (!key(written).includes(`/${STATE}/work/`)) claimHere(path.dirname(realish(written)), "Editing a file");
   process.exit(0);
 }
 
@@ -413,11 +438,6 @@ function checkGh(args) {
   const approves = (area === "pr" && verb === "review" && args.some((t, i) => !GH_VALUE_FLAGS.test(args[i - 1] ?? "") && (/^-[a-zA-Z]*a[a-zA-Z]*$/.test(t) || /^--approve(=|$)/.test(t))))
     || (api && /\bevent["':=\s]*APPROVE\b/i.test(all));
   if (merges && args.some((t) => /^--admin(=|$)/.test(t))) block("gh pr merge --admin skips the branch protection. Merge through the normal checks.");
-  // A worker merges, approves and moves nothing either; it is not held to reads only.
-  if (!inSubagent && restricted()) {
-    if (merges || approves || movesRef) block("a worker session never merges, approves or moves a branch on GitHub. The orchestrator does, with the product owner's confirmation.");
-    if (((area === "pr" && /^(checkout|co)$/.test(verb)) || area === "co") && isMainCheckout(here)) block("a worker session never switches the main checkout.");
-  }
   if (inSubagent) {
     if (merges) block("role agents never merge. The product owner merges, or asks the orchestrator to.");
     if (approves) block("role agents never approve a pull request.");
@@ -434,7 +454,7 @@ function checkGh(args) {
   // gh pr checkout switches the folder it runs in, like git switch.
   if ((area === "pr" && /^(checkout|co)$/.test(verb)) || area === "co") {
     const b = currentBranch(here);
-    if (b && protectedBranches.includes(b) && isMainCheckout(here)) confirm(`the main checkout stays on ${b}: the human merges from it. Check the pull request out in a worktree instead. Confirm the human wants this folder switched.`);
+    if (b && protectedBranches.includes(b) && isMainCheckout(here)) block(`the main checkout stays on ${b}: the human merges from it. Check the pull request out in a worktree instead.`);
   }
   if (merges) confirm("a merge is the product owner's call. Confirm they asked for this one.");
   if (approves) confirm("approving a pull request is the product owner's call. Confirm they asked for this one.");
@@ -522,16 +542,11 @@ function checkGit(args) {
   const onProtected = () => { const b = currentBranch(dirArg); return b && protectedBranches.includes(b) ? b : null; };
   const target = sub === "switch" ? swLoose.find((a) => a !== "-") : swLoose[0];
   const noop = !has(/^-[a-zA-Z]*[bBcCd][a-zA-Z]*$|^--(orphan|detach|create|force-create)$/) && target && target === currentBranch(dirArg);
-  // A role agent or a worker never changes the human's checkout, whatever branch it is on.
-  if (restricted() && !inSubagent && isMainCheckout(dirArg) && (switches || movesHead || ["commit", "merge", "rebase", "cherry-pick", "pull", "am", "revert", "reset", "stash"].includes(sub))) {
-    block("a worker session never changes the main checkout: the human merges from it. Work in your own worktree.");
-  }
+  // Nobody switches the main checkout off its protected branch: every session runs its work in a worktree.
+  // (0.16.0: with several orchestrators at once, a confirmation was not enough.)
   if (((switches && !noop) || movesHead) && isMainCheckout(dirArg)) {
     const b = onProtected();
-    if (b) {
-      if (restricted()) block(`the main checkout stays on ${b}: the human merges from it. Work in your own worktree.`);
-      confirm(`the main checkout stays on ${b}: the human merges from it. Run the block in a worktree instead. Confirm the human wants this folder switched.`);
-    }
+    if (b) block(`the main checkout stays on ${b}: the human merges from it, and other sessions rely on it. Work in your own worktree.`);
   }
   // Moving a protected branch without a merge command is a merge too: git fetch . x:main, git push origin x:main,
   // git branch -f / -M / -C onto main, git update-ref refs/heads/main, git reset <commit> while on main.
@@ -577,6 +592,9 @@ function checkGit(args) {
     || (sub === "checkout" && rest.includes("--") && rest.slice(0, rest.indexOf("--")).every((a) => /^HEAD$/i.test(a)));
   if (["rm", "mv"].includes(sub)) checkPaths(sub === "mv" ? rest.slice(0, -1) : rest, dirArg, true);
   if (["rm", "mv", "checkout", "restore"].includes(sub) && !toHead) checkPaths(rest, dirArg);
+  // Last, so a more specific block names its own reason.
+  // A command that changes a linked worktree's files or branch claims it for this session.
+  if (["commit", "merge", "rebase", "cherry-pick", "pull", "am", "revert", "reset", "stash", "switch", "checkout", "restore", "add", "rm", "mv", "clean"].includes(sub)) claimHere(dirArg, `git ${sub}`);
 }
 
 const NULL_DEVICE = /^(\/dev\/null|\$null|nul)$/i;
@@ -730,6 +748,11 @@ if (input.hook_event_name === "PreToolUse" && ["Bash", "PowerShell"].includes(in
     const cmd = commandKey(input.tool_input?.command);
     const failed = readBreaker().failures?.[runId]?.[cmd];
     if (failed?.times >= maxSameFailure) block(`\`${cmd.slice(0, 200)}\` failed ${failed.times} times in a row with the same output. Do not run it again: stop and report BLOCKED with that output and what you tried.`);
+  }
+  // Releasing a worktree hands another session's folder to this one: the human's call.
+  if (/sessions\.mjs["']?\s+release\b/.test(String(input.tool_input?.command ?? ""))) {
+    if (inSubagent) block("role agents never release a session's worktree. Report it to the orchestrator.");
+    confirm("this releases a worktree another session may still work in. Confirm the human says that session is finished.");
   }
   const data = splitDataHeredocs(String(input.tool_input?.command ?? ""));
   // The body of a text heredoc is not checked at all: the Write tool writes the same file unread.

@@ -1,10 +1,10 @@
 <!-- ORCHESTRATOR:START -->
 ## Orchestrated work (orchestrator)
 
-This project uses the orchestrator plugin. The main session follows the `orchestrator:orchestrate` skill. Stories follow the `orchestrator:stories` skill.
+This project uses the orchestrator plugin. Every main session, in the main checkout or in any worktree, follows the `orchestrator:orchestrate` skill. Stories follow the `orchestrator:stories` skill.
 
 - **Product state:** `{{STORIES_DIR}}/map.md` (generated). Stories: `{{STORIES_DIR}}/stories/`. Decisions: `{{STORIES_DIR}}/decisions/`.
-- **Plugs:** `.orchestrator.json`. **Ledger:** `.orchestrator/state.md`. **Locked tests:** `.orchestrator/locked-tests.txt`.
+- **Plugs:** `.orchestrator.json`. **Ledger:** shared by every session, outside git; the session start names its path. **Locked tests:** `.orchestrator/locked-tests.txt`.
 - **Done means:** `{{FULL_VERIFICATION_COMMANDS}}` all pass, and `node {{STORIES_DIR}}/stories.mjs --tests --check` passes.
 - **Tests cannot prove:** {{RUNNER_LIMIT}} The human reviews these.
 - **Test naming:** {{TEST_NAMING_CONVENTION}}

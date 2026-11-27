@@ -16,6 +16,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { reachableElsewhere, teardown, worktreeConfig } from "./worktree.mjs";
+import { liveClaims, sharedDir } from "./sessions.mjs";
+import { realpathSync } from "node:fs";
+const FOLDC = (p) => (process.platform === "win32" || process.platform === "darwin" ? p.toLowerCase() : p);
 
 const args = process.argv.slice(2);
 const RUN = args.includes("--run");
@@ -32,6 +35,13 @@ const git = (argv, cwd = root) => { const r = run(argv, cwd); return r.code === 
 let root;
 try { root = execFileSync("git", ["rev-parse", "--show-toplevel"], { stdio: ["ignore", "pipe", "ignore"] }).toString().trim(); }
 catch { if (!SUMMARY) console.error("tidy: not inside a git repository."); process.exit(SUMMARY ? 0 : 1); }
+// Any session may run tidy, from any worktree: it always tidies from the main checkout, where the work
+// folders and the agent worktrees live.
+{ const first = /^worktree (.+)$/m.exec(git(["worktree", "list", "--porcelain"]) ?? "")?.[1];
+  if (first && existsSync(path.join(first, ".git")) && statSync(path.join(first, ".git")).isDirectory()) root = first; }
+// Worktrees another live session holds stay, whatever their state (sessions.mjs).
+const claimed = Object.values(liveClaims(root)).map((c) => path.resolve(c.folder));
+const isClaimed = (p) => { const r = (() => { try { return realpathSync(p); } catch { return path.resolve(p); } })(); return claimed.some((c) => FOLDC(c) === FOLDC(r)); };
 
 const STATE = existsSync(path.join(root, ".orchestrator.json")) || !existsSync(path.join(root, ".orquestador.json")) ? ".orchestrator" : ".orquestador";
 const configPath = path.join(root, `${STATE}.json`);
@@ -42,9 +52,10 @@ try { config = JSON.parse(readFileSync(configPath, "utf8").replace(/^﻿/, ""));
 const protectedBranches = config.git?.protectedBranches ?? ["main", "master"];
 const mainBranch = protectedBranches.find((b) => git(["rev-parse", "--verify", "--quiet", `refs/heads/${b}`]) !== null);
 const current = (git(["branch", "--show-current"]) ?? "").trim();
-// state.md lists the work in progress: a folder or branch it names is kept.
-const statePath = path.join(root, STATE, "state.md");
-const stateText = existsSync(statePath) ? readFileSync(statePath, "utf8") : "";
+// The shared ledger lists every session's work in progress: a folder or branch it names is kept. A tracked
+// .orchestrator/state.md from before 0.16.0 counts too.
+const statePaths = [sharedDir(root) && path.join(sharedDir(root), "state.md"), path.join(root, STATE, "state.md")].filter((p) => p && existsSync(p));
+const stateText = statePaths.map((p) => readFileSync(p, "utf8")).join("\n");
 const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // A whole name, not part of a longer one: explore/a is not named by explore/a-2.
 const names = (text, name) => new RegExp(`(^|[^A-Za-z0-9_./-])${esc(name)}($|[^A-Za-z0-9_./-])`, "m").test(text);
@@ -59,7 +70,7 @@ const workFolders = existsSync(workDir)
 // work folder, with either slash, cites it. A search that fails keeps the folder.
 const cited = new Map();
 for (const name of workFolders) {
-  if (names(stateText, name)) { cited.set(name, [`${STATE}/state.md`]); continue; }
+  if (names(stateText, name)) { cited.set(name, ["the shared ledger"]); continue; }
   const r = run(["grep", "--untracked", "-l", "-E", `${esc(STATE)}[/\\\\]work[/\\\\]${esc(name)}([^A-Za-z0-9_.-]|$)`, "--", ".", `:!${STATE}`]);
   if (r.code === 0 && r.out.trim()) cited.set(name, r.out.trim().split(/\r?\n/));
   else if (r.code !== 1) cited.set(name, ["(the search failed)"]);
@@ -98,6 +109,7 @@ const worktreeOf = (b) => worktrees.find((w) => w.branch === b && w.path !== mai
 const hasReports = (w) => { const d = path.join(w.path, STATE, "work"); return existsSync(d) && readdirSync(d).length > 0; };
 const reasonToKeep = (b) => {
   const w = worktreeOf(b);
+  if (w && isClaimed(w.path)) return `a session works in its worktree ${w.path}`;
   if (w && existsSync(w.path)) {
     if ((git(["status", "--porcelain"], w.path) ?? "x").trim() !== "") return `its worktree ${w.path} has uncommitted changes`;
     if (hasReports(w)) return `its worktree ${w.path} holds reports in ${STATE}/work/`;
@@ -117,7 +129,7 @@ const idle = (w) => { try { const g = git(["rev-parse", "--git-dir"], w.path)?.t
 const unusedCandidates = agentDir ? worktrees.filter((w) => path.dirname(path.resolve(w.path)) === path.resolve(agentDir)
   && w.branch === `worktree-${path.basename(w.path).replace(/\+/g, "/")}` && !w.locked && existsSync(w.path) && path.resolve(w.path) !== path.resolve(root)
   && !keep.has(w.branch) && !keep.has(path.basename(w.path)) && !names(stateText, w.branch) && !names(stateText, path.basename(w.path))
-  && neverCommitted(w.branch) && (git(["status", "--porcelain"], w.path) ?? "x").trim() === "" && !hasReports(w) && idle(w)) : [];
+  && neverCommitted(w.branch) && (git(["status", "--porcelain"], w.path) ?? "x").trim() === "" && !hasReports(w) && idle(w) && !isClaimed(w.path)) : [];
 // A worktree-<name> branch whose worktree is gone and that never had commits holds nothing.
 const strayCandidates = (git(["branch", "--list", "worktree-*", "--format=%(refname:short)"]) ?? "").split(/\r?\n/).map((s) => s.trim())
   .filter((b) => b && !worktrees.some((w) => w.branch === b) && neverCommitted(b) && !keep.has(b) && !names(stateText, b));

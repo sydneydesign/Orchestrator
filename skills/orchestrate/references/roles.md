@@ -20,7 +20,7 @@ A finding that recurs across reviews also signals a missing role.
 2. Fill every field. A role is a contract: purpose, inputs, output file, tools, model, turn limit, escalation rule, report shape.
 3. Read-only roles get `Write` only to write their report under `.orchestrator/work/`. They get no `Edit`. Only roles that own a deliverable edit project files, and only their deliverable.
 4. State in the role's `description` which test it meets.
-5. Record the addition in `.orchestrator/state.md` as a ruling, and list it in the close report.
+5. Record the addition in your section of the shared ledger as a ruling, and list it in the close report.
 
 Creating, changing or retiring a role is the orchestrator's call. It is internal and reversible. It does not need the human's approval.
 
